@@ -262,10 +262,6 @@ static void task_process_handler(void *arg)
                     strncpy(csv_gps.timestamp, current_gps.timestamp, sizeof(csv_gps.timestamp) - 1);
                     csv_gps.timestamp[sizeof(csv_gps.timestamp) - 1] = '\0';
 
-                    // Dummy embedding no longer needed - server extracts from JPG
-                    float face_embedding[1] = {0};
-                    int embedding_size = 0;
-
                     // 1. Check if we have any enrolled faces
                     if (recognizer->get_enrolled_id_num() == 0)
                     {
@@ -273,20 +269,17 @@ static void task_process_handler(void *arg)
                         recognizer->enroll_id((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, detect_results.front().keypoint, "", true);
                         stored_face_id = recognizer->get_enrolled_ids().back().id;
                         faces_enrolled++;
-                        ESP_LOGI(TAG, "🎉 FIRST FACE ENROLLED: ID %d", stored_face_id);
+                        
+                        // EXTRACT EMBEDDING AFTER ENROLLMENT
+                        Tensor<float> &last_embedding = recognizer->get_face_emb(-1);
+                        float *face_embedding = last_embedding.element;
+                        int embedding_size = last_embedding.get_size();
+
+                        ESP_LOGI(TAG, "🎉 FIRST FACE ENROLLED: ID %d (Embedding size: %d)", stored_face_id, embedding_size);
                         frame_show_state = SHOW_STATE_ENROLL;
                         
-                        // Convert current frame to JPG for server-side processing
-                        uint8_t *jpg_buf = NULL;
-                        size_t jpg_len = 0;
-                        if (frame2jpg(frame, 60, &jpg_buf, &jpg_len)) {
-                            ESP_LOGI(TAG, "📸 Frame converted to JPG (%d bytes)", jpg_len);
-                            csv_logger_log_face(stored_face_id, face_embedding, embedding_size, csv_gps, jpg_buf, jpg_len);
-                            free(jpg_buf);
-                        } else {
-                            ESP_LOGE(TAG, "❌ JPG conversion failed");
-                            csv_logger_log_face(stored_face_id, face_embedding, embedding_size, csv_gps, NULL, 0);
-                        }
+                        // Log with real embedding, no image data
+                        csv_logger_log_face(stored_face_id, face_embedding, embedding_size, csv_gps, NULL, 0);
                         
                         s_last_detection_us = esp_timer_get_time();
                         csv_uploader_trigger_now();
@@ -296,19 +289,28 @@ static void task_process_handler(void *arg)
                         // Face recognition for subsequent detections
                         recognize_result = recognizer->recognize((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, detect_results.front().keypoint);
                         
+                        // EXTRACT EMBEDDING AFTER RECOGNITION
+                        Tensor<float> &last_embedding = recognizer->get_face_emb(-1);
+                        float *face_embedding = last_embedding.element;
+                        int embedding_size = last_embedding.get_size();
+
                         ESP_LOGI(TAG, "RECOGNIZE: Similarity: %f, Match ID: %d, Threshold: %f", 
                                  recognize_result.similarity, recognize_result.id, SIMILARITY_THRESHOLD);
                         
                         // Check if similarity is above threshold
-                        if (recognize_result.id > 0 && !isnan(recognize_result.similarity) && recognize_result.similarity >= SIMILARITY_THRESHOLD) {
-                            ESP_LOGI(TAG, "✅ FACE MATCHED - ID: %d, Similarity: %.3f", recognize_result.id, recognize_result.similarity);
+                        if (!isnan(recognize_result.similarity) && recognize_result.similarity >= SIMILARITY_THRESHOLD) {
+                            ESP_LOGI(TAG, "✅ FACE MATCHED - Similarity: %.3f", recognize_result.similarity);
                             frame_show_state = SHOW_STATE_RECOGNIZE;
+                            
+                            // Log matching event with real embedding
+                            csv_logger_log_face(recognize_result.id, face_embedding, embedding_size, csv_gps, NULL, 0);
+                            csv_uploader_trigger_now();
                         } else {
                             // Different person detected (low similarity)
-                            ESP_LOGW(TAG, "🆕 NEW PERSON DETECTED (Similarity too low)");
+                            ESP_LOGW(TAG, "🆕 NEW PERSON DETECTED (Similarity too low: %.3f)", recognize_result.similarity);
                             
                             int64_t now_us = esp_timer_get_time();
-                            // Implementation of 30-second throttle
+                            // Implementation of 30-second throttle for new person enrollment
                             if ((now_us - s_last_detection_us) >= (30 * 1000 * 1000)) {
                                 // Clear old and enroll new
                                 while (recognizer->get_enrolled_id_num() > 0) recognizer->delete_id(true);
@@ -316,18 +318,15 @@ static void task_process_handler(void *arg)
                                 recognizer->enroll_id((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, detect_results.front().keypoint, "", true);
                                 stored_face_id = recognizer->get_enrolled_ids().back().id;
                                 faces_enrolled++;
+                                
+                                // RE-EXTRACT AFTER NEW ENROLLMENT
+                                Tensor<float> &new_embedding = recognizer->get_face_emb(-1);
+                                
                                 ESP_LOGI(TAG, "🔄 REPLACED FACE: ID %d", stored_face_id);
                                 frame_show_state = SHOW_STATE_ENROLL;
 
-                                // Send new face to server
-                                uint8_t *jpg_buf = NULL;
-                                size_t jpg_len = 0;
-                                if (frame2jpg(frame, 60, &jpg_buf, &jpg_len)) {
-                                    csv_logger_log_face(stored_face_id, face_embedding, embedding_size, csv_gps, jpg_buf, jpg_len);
-                                    free(jpg_buf);
-                                } else {
-                                    csv_logger_log_face(stored_face_id, face_embedding, embedding_size, csv_gps, NULL, 0);
-                                }
+                                // Log new face with embedding
+                                csv_logger_log_face(stored_face_id, new_embedding.element, new_embedding.get_size(), csv_gps, NULL, 0);
                                 
                                 s_last_detection_us = now_us;
                                 csv_uploader_trigger_now();

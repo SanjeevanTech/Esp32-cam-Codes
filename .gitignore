@@ -1,0 +1,22 @@
+# ESP-IDF specific
+build/
+sdkconfig
+sdkconfig.old
+
+# Python byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local configuration file (contains passwords/sensitive data)
+local_settings.py
+
+# Editor folders
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+managed_components/
+dependencies.lock

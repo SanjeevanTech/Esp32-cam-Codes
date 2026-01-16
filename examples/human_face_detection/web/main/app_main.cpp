@@ -189,22 +189,29 @@ void system_status_task(void *pvParameters)
     }
 }
 
-// Frame forwarding handled by face recognition: Camera → AI → HTTP
-
 extern "C" void app_main()
 {
-    ESP_LOGI(TAG, "Starting ESP32-CAM Face Detection System");
+    // ⬇️ ESSENTIAL LOGS ONLY: Quiet mode
+    esp_log_level_set("*", ESP_LOG_ERROR);           // Hide everything by default
+    esp_log_level_set("APP_MAIN", ESP_LOG_INFO);    // Show time sync and trip status
+    esp_log_level_set("POWER_MGMT", ESP_LOG_INFO);  // Show trip logs
+    esp_log_level_set("camera wifi", ESP_LOG_INFO); // Show WiFi connection status
+    esp_log_level_set("human_face_recognition", ESP_LOG_INFO); // Show detection results
     
-    // Device configuration initialization
+    // Silence other application tags
+    esp_log_level_set("DEVICE_CFG", ESP_LOG_ERROR);
+    esp_log_level_set("POWER_SYNC", ESP_LOG_ERROR);
+    esp_log_level_set("HEARTBEAT", ESP_LOG_ERROR);
+    esp_log_level_set("GPS_NEO7M", ESP_LOG_ERROR);
+    esp_log_level_set("CSV_LOGGER", ESP_LOG_INFO);
+    esp_log_level_set("CSV_UPLOADER", ESP_LOG_INFO);
+    esp_log_level_set("who_camera", ESP_LOG_ERROR);
+    
+    // Device configuration initialization (Silent)
     esp_err_t config_ret = device_config_load(&g_device_config);
     if (config_ret != ESP_OK) {
-        ESP_LOGW(TAG, "Using default device config");
         device_config_init(&g_device_config);
     }
-    
-    ESP_LOGI(TAG, "Bus: %s | Device: %s | Type: %s", 
-             g_device_config.bus_id, g_device_config.device_id, 
-             g_device_config.location_type);
     
     // Initialize WiFi and mDNS
     app_wifi_main();
@@ -226,9 +233,9 @@ extern "C" void app_main()
     }
     
     if (is_time_synchronized()) {
-        ESP_LOGI(TAG, "✅ Time synchronized successfully");
+        // Log moved to end of app_main to avoid duplicates
     } else {
-        ESP_LOGW(TAG, "⚠️ Proceeding without time sync - trip checks may be unreliable!");
+        ESP_LOGE(TAG, "❌ Time sync failed - trip checks may be unreliable!");
     }
     
     // Wait for network to stabilize
@@ -248,8 +255,6 @@ extern "C" void app_main()
     if (sync_ret == ESP_OK) {
         sync_ret = power_config_sync_start();
         if (sync_ret == ESP_OK) {
-            ESP_LOGI(TAG, "✅ Power config sync started - fetching from server...");
-            
             // Wait for initial sync from server (up to 10 seconds)
             // This ensures we have the correct trip hours before starting face detection
             int sync_retry = 0;
@@ -383,8 +388,19 @@ extern "C" void app_main()
     ESP_LOGI(TAG, "🔍 Checking if current time is within trip hours...");
     
     if (!power_mgmt_is_trip_time()) {
-        ESP_LOGW(TAG, "⏰ OUTSIDE TRIP HOURS - Entering deep sleep immediately");
-        ESP_LOGW(TAG, "💤 Face detection will NOT start until trip time begins");
+        time_t now;
+        struct tm timeinfo;
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        
+        ESP_LOGI(TAG, "--------------------------------------------------");
+        ESP_LOGI(TAG, "⏰ Trip Status: [Before Deep Sleep Condition]");
+        ESP_LOGI(TAG, "   Currect Time: %02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+        ESP_LOGI(TAG, "   Condition: OUTSIDE TRIP HOURS");
+        ESP_LOGI(TAG, "   Face detection DISABLED. Entering deep sleep.");
+        ESP_LOGI(TAG, "--------------------------------------------------");
+        
+        vTaskDelay(pdMS_TO_TICKS(1000));
         enter_deep_sleep();
         
         // If we return from deep sleep (shouldn't happen), restart
@@ -424,12 +440,9 @@ extern "C" void app_main()
     ESP_LOGI(TAG, "  📷 Camera: QVGA (320x240), 3 buffers");
     ESP_LOGI(TAG, "  🧠 Detection: MSR01 + MNP01 (relaxed thresholds)");
     ESP_LOGI(TAG, "  📊 Free heap: %d bytes", esp_get_free_heap_size());
-    ESP_LOGI(TAG, "═══════════════════════════════════════════════════════");
-
     // Start monitoring tasks
     xTaskCreate(system_status_task, "system_status", 2560, NULL, 4, NULL);
     xTaskCreate(time_status_task, "time_status", 2048, NULL, 3, NULL);
     
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    ESP_LOGI(TAG, "✅ System startup complete");
+    vTaskDelay(pdMS_TO_TICKS(100));
 }

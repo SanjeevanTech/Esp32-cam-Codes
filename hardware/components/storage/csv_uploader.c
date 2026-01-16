@@ -167,28 +167,9 @@ static esp_err_t upload_logs_to_server(face_log_entry_t* logs, int count)
         cJSON_AddItemToObject(log_entry, "face_embedding", embedding_array);
         cJSON_AddNumberToObject(log_entry, "embedding_size", logs[i].embedding_size);
         
-        // 🖼️ ADD IMAGE DATA (Base64)
-        if (logs[i].image_ptr && logs[i].image_len > 0) {
-            size_t b64_len = 0;
-            // Calculate required buffer size: ((len + 2) / 3 * 4) + 1 null terminator
-            size_t b64_buf_size = ((logs[i].image_len + 2) / 3 * 4) + 1;
-            char* b64_buf = (char*)malloc(b64_buf_size);
-            
-            if (b64_buf) {
-                int res = mbedtls_base64_encode((unsigned char*)b64_buf, b64_buf_size, &b64_len, 
-                                              (unsigned char*)logs[i].image_ptr, logs[i].image_len);
-                if (res == 0) {
-                    b64_buf[b64_len] = '\0';
-                    cJSON_AddStringToObject(log_entry, "image_data", b64_buf);
-                    ESP_LOGI(TAG, "Added image_data to JSON (%d bytes JPG -> %d bytes B64)", logs[i].image_len, b64_len);
-                } else {
-                    ESP_LOGE(TAG, "B64 encoding failed: %d", res);
-                }
-                free(b64_buf);
-            } else {
-                ESP_LOGE(TAG, "Failed to allocate B64 buffer (%d bytes)", b64_buf_size);
-            }
-        }
+        // 🖼️ IMAGE DATA REMOVED - Embedding only mode
+        // Note: The backend will receive NULL for image_data and use the provided face_embedding array
+        cJSON_AddNullToObject(log_entry, "image_data");
         
         cJSON_AddStringToObject(log_entry, "location_type", logs[i].location_type);
         cJSON_AddNumberToObject(log_entry, "latitude", logs[i].latitude);

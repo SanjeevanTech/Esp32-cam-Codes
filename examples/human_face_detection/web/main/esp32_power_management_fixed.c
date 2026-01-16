@@ -145,7 +145,7 @@ static bool is_trip_time(void)
                     is_trip = true;
                     
                     if (current_time - last_log_time >= g_power_config.log_interval_sec) {
-                        ESP_LOGI(TAG, "🕐 Multi-Trip: Current=%02d:%02d, InTrip=%s (%s - %02d:%02d to %02d:%02d)", 
+                        ESP_LOGD(TAG, "🕐 Multi-Trip: Current=%02d:%02d, InTrip=%s (%s - %02d:%02d to %02d:%02d)", 
                                 current_hour, current_minute, "YES",
                                 g_power_config.trip_windows[i].trip_name,
                                 g_power_config.trip_windows[i].start_hour,
@@ -163,7 +163,7 @@ static bool is_trip_time(void)
                     is_trip = true;
                     
                     if (current_time - last_log_time >= g_power_config.log_interval_sec) {
-                        ESP_LOGI(TAG, "🕐 Multi-Trip: Current=%02d:%02d, InTrip=%s (%s - %02d:%02d to %02d:%02d)", 
+                        ESP_LOGD(TAG, "🕐 Multi-Trip: Current=%02d:%02d, InTrip=%s (%s - %02d:%02d to %02d:%02d)", 
                                 current_hour, current_minute, "YES",
                                 g_power_config.trip_windows[i].trip_name,
                                 g_power_config.trip_windows[i].start_hour,
@@ -178,7 +178,7 @@ static bool is_trip_time(void)
         }
         
         if (!is_trip && current_time - last_log_time >= g_power_config.log_interval_sec) {
-            ESP_LOGI(TAG, "🕐 Multi-Trip: Current=%02d:%02d, InTrip=NO (%d windows)", 
+            ESP_LOGD(TAG, "🕐 Multi-Trip: Current=%02d:%02d, InTrip=NO (%d windows)", 
                     current_hour, current_minute, g_power_config.trip_window_count);
             last_log_time = current_time;
         }
@@ -203,7 +203,7 @@ static bool is_trip_time(void)
     
     // Controlled logging based on configurable interval
     if (current_time - last_log_time >= g_power_config.log_interval_sec) {
-        ESP_LOGI(TAG, "🕐 Time Check: Current=%02d:%02d, Trip=%02d:%02d-%02d:%02d, InTrip=%s", 
+        ESP_LOGD(TAG, "🕐 Time Check: Current=%02d:%02d, Trip=%02d:%02d-%02d:%02d, InTrip=%s", 
                  current_hour, current_minute,
                  g_power_config.trip_start_hour, g_power_config.trip_start_minute,
                  g_power_config.trip_end_hour, g_power_config.trip_end_minute,
@@ -686,7 +686,7 @@ esp_err_t power_mgmt_set_check_intervals(int trip_check_sec, int idle_check_sec,
 
 esp_err_t power_mgmt_set_normal_intervals(void)
 {
-    ESP_LOGI(TAG, "� Setting NORMAL intervals for production");
+    ESP_LOGI(TAG, "📊 Setting NORMAL intervals for production");
     return power_mgmt_set_check_intervals(60, 300, 30, 300); // 1min, 5min, 30s, 5min
 }
 

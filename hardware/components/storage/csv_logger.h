@@ -33,7 +33,7 @@ typedef struct {
     char timestamp[32];
     int face_id;                    // Keep for backward compatibility
     float face_embedding[128];      // Face embedding vector (128 dimensions)
-    int embedding_size;             // Size of embedding (should be 128)
+    int embedding_size;             // Size of embedding (usually 128)
     char location_type[16];
     double latitude;
     double longitude;

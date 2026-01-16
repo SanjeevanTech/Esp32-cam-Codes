@@ -74,10 +74,15 @@ esp_err_t csv_logger_log_face(int face_id, float* face_embedding, int embedding_
     
     entry.face_id = face_id;
     
-    // Copy face embedding
-    if (face_embedding && embedding_size > 0 && embedding_size <= 128) {
-        memcpy(entry.face_embedding, face_embedding, embedding_size * sizeof(float));
-        entry.embedding_size = embedding_size;
+    // Copy face embedding (Truncate if larger than 128)
+    if (face_embedding && embedding_size > 0) {
+        int copy_size = (embedding_size > 128) ? 128 : embedding_size;
+        memcpy(entry.face_embedding, face_embedding, copy_size * sizeof(float));
+        entry.embedding_size = copy_size;
+        
+        if (embedding_size > 128) {
+            ESP_LOGW(TAG, "Embedding truncated from %d to 128 dimensions", embedding_size);
+        }
     } else {
         memset(entry.face_embedding, 0, sizeof(entry.face_embedding));
         entry.embedding_size = 0;
@@ -105,23 +110,9 @@ esp_err_t csv_logger_log_face(int face_id, float* face_embedding, int embedding_
     entry.trip_active = false;
     entry.uptime_us = esp_timer_get_time(); // Record precise uptime for time repair logic
     
-    // Store image data if provided (allocate memory)
-    if (image_buf && image_len > 0) {
-        uint8_t* stored_img = (uint8_t*)malloc(image_len);
-        if (stored_img) {
-            memcpy(stored_img, image_buf, image_len);
-            entry.image_ptr = (uintptr_t)stored_img;
-            entry.image_len = image_len;
-            ESP_LOGI(TAG, "Stored image data in log entry (%d bytes)", image_len);
-        } else {
-            ESP_LOGE(TAG, "Failed to allocate memory for image data (%d bytes)", image_len);
-            entry.image_ptr = 0;
-            entry.image_len = 0;
-        }
-    } else {
-        entry.image_ptr = 0;
-        entry.image_len = 0;
-    }
+    // Image storage disabled - Embedding only mode saves RAM
+    entry.image_ptr = 0;
+    entry.image_len = 0;
     
     // Store in memory buffer (circular buffer)
     if (s_log_count >= MAX_LOG_ENTRIES) {
