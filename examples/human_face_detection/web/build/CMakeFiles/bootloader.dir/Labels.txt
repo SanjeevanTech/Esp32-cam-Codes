@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/CMakeFiles/bootloader
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/CMakeFiles/bootloader.rule
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/CMakeFiles/bootloader-complete.rule
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule

@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/CMakeFiles/bootloader"
+		},
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/CMakeFiles/bootloader.rule"
+		},
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/CMakeFiles/bootloader-complete.rule"
+		},
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule"
+		},
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule"
+		},
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule"
+		},
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule"
+		},
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule"
+		},
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule"
+		},
+		{
+			"file" : "G:/cloneespwho/esp32/examples/human_face_detection/web/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"bootloader"
+		],
+		"name" : "bootloader"
+	}
+}
