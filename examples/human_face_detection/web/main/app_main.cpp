@@ -202,8 +202,8 @@ extern "C" void app_main()
     
     // Silence other application tags
     esp_log_level_set("DEVICE_CFG", ESP_LOG_ERROR);
-    esp_log_level_set("POWER_SYNC", ESP_LOG_ERROR);
-    esp_log_level_set("HEARTBEAT", ESP_LOG_ERROR);
+    esp_log_level_set("POWER_SYNC", ESP_LOG_INFO);
+    esp_log_level_set("HEARTBEAT", ESP_LOG_INFO);
     esp_log_level_set("GPS_NEO7M", ESP_LOG_ERROR);
     esp_log_level_set("CSV_LOGGER", ESP_LOG_INFO);
     esp_log_level_set("CSV_UPLOADER", ESP_LOG_INFO);

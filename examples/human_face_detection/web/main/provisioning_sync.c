@@ -13,15 +13,22 @@ static char g_node_server_url[128] = {0};
 static char g_bus_id[32] = {0};
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
-    if (evt->event_id == HTTP_EVENT_ON_DATA) {
-        if (evt->user_data) {
-            char *buffer = (char *)evt->user_data;
-            int current_len = strlen(buffer);
-            if (current_len + evt->data_len < 1024) {
-                memcpy(buffer + current_len, evt->data, evt->data_len);
-                buffer[current_len + evt->data_len] = '\0';
+    switch(evt->event_id) {
+        case HTTP_EVENT_ON_DATA:
+            if (evt->user_data && evt->data_len > 0) {
+                char *buffer = (char *)evt->user_data;
+                int current_len = strlen(buffer);
+                if (current_len + evt->data_len < 1023) {
+                    memcpy(buffer + current_len, evt->data, evt->data_len);
+                    buffer[current_len + evt->data_len] = '\0';
+                }
             }
-        }
+            break;
+        case HTTP_EVENT_ERROR:
+            ESP_LOGD(TAG, "HTTP_EVENT_ERROR");
+            break;
+        default:
+            break;
     }
     return ESP_OK;
 }
@@ -57,7 +64,8 @@ static void provisioning_task(void *pvParameters) {
             .url = url,
             .event_handler = http_event_handler,
             .user_data = response_buffer,
-            .timeout_ms = 5000,
+            .timeout_ms = 15000,  // Increased to 15s for busy AWS servers
+            .keep_alive_enable = false, // Disable to prevent stale connection errors
         };
 
         esp_http_client_handle_t client = esp_http_client_init(&config);

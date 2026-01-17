@@ -40,6 +40,7 @@ using namespace std;
 using namespace dl;
 
 static const char *TAG = "human_face_recognition";
+extern "C" bool power_mgmt_is_trip_time(void);
 
 static QueueHandle_t xQueueFrameI = NULL;
 static QueueHandle_t xQueueEvent = NULL;
@@ -145,7 +146,8 @@ static void task_process_handler(void *arg)
         .callback = &led_off_timer_callback,
         .arg = NULL,
         .dispatch_method = ESP_TIMER_TASK,
-        .name = "led_off_timer"
+        .name = "led_off_timer",
+        .skip_unhandled_events = false
     };
     esp_err_t timer_err = esp_timer_create(&timer_args, &s_led_timer);
     if (timer_err != ESP_OK) {
@@ -190,6 +192,34 @@ static void task_process_handler(void *arg)
         if (recognizer->get_enrolled_id_num() > 0) {
             stored_face_id = recognizer->get_enrolled_ids().back().id;
             ESP_LOGI(TAG, "Loaded existing face ID: %d", stored_face_id);
+            
+            // Validate the loaded embedding
+            Tensor<float> &emb = recognizer->get_face_emb(stored_face_id);
+            bool is_valid = true;
+            float sum_sq = 0;
+            if (emb.element) {
+                for (int i = 0; i < emb.get_size(); i++) {
+                    if (isnan(emb.element[i]) || isinf(emb.element[i])) {
+                        is_valid = false;
+                        break;
+                    }
+                    sum_sq += emb.element[i] * emb.element[i];
+                }
+                if (sum_sq < 1e-6) is_valid = false;
+            } else {
+                is_valid = false;
+            }
+
+            if (!is_valid) {
+                 ESP_LOGW(TAG, "⚠️ Loaded ID %d has invalid embedding (NaN/Inf/Zero). Deleting...", stored_face_id);
+                 recognizer->delete_id(stored_face_id, true);
+                 stored_face_id = -1;
+                 recognizer->delete_id(stored_face_id, true);
+                 stored_face_id = -1;
+                 // faces_enrolled not yet defined/needed here as it starts at 0 later
+            } else {
+                 ESP_LOGI(TAG, "✅ Loaded ID %d embedding is valid (Norm Sq: %.4f)", stored_face_id, sum_sq);
+            }
         }
     }
     
@@ -199,10 +229,24 @@ static void task_process_handler(void *arg)
     
     int process_count = 0;
     int faces_detected = 0;
-    int faces_enrolled = 0;
 
+    static bool was_paused = false;
     while (true)
     {
+        // --- POWER SAVING: CHECK IF WE SHOULD BE DETECTING ---
+        // If not trip time (e.g. maintenance window), sleep the task to save CPU
+        if (!power_mgmt_is_trip_time()) {
+            if (!was_paused) {
+                ESP_LOGI(TAG, "⏸️ Face recognition PAUSED (Maintenance/Off-trip)");
+                was_paused = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(5000)); // Check every 5 seconds
+            continue;
+        } else if (was_paused) {
+            ESP_LOGI(TAG, "▶️ Face recognition RESUMED (Trip time active)");
+            was_paused = false;
+        }
+        
         xSemaphoreTake(xMutex, portMAX_DELAY);
         _gEvent = RECOGNIZE;
         gEvent = RECOGNIZE;
@@ -219,7 +263,7 @@ static void task_process_handler(void *arg)
                 // Log every 10 frames
                 if (process_count % 10 == 0) {
                     ESP_LOGI(TAG, "🔍 Processing frame %d (size: %dx%d, detected: %d, enrolled: %d)", 
-                             process_count, frame->width, frame->height, faces_detected, faces_enrolled);
+                             process_count, frame->width, frame->height, faces_detected, (int)recognizer->get_enrolled_id_num());
                 }
                 
                 int64_t start_time = esp_timer_get_time();
@@ -268,37 +312,82 @@ static void task_process_handler(void *arg)
                         // First time detection - auto enroll
                         recognizer->enroll_id((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, detect_results.front().keypoint, "", true);
                         stored_face_id = recognizer->get_enrolled_ids().back().id;
-                        faces_enrolled++;
                         
                         // EXTRACT EMBEDDING AFTER ENROLLMENT
                         Tensor<float> &last_embedding = recognizer->get_face_emb(-1);
                         float *face_embedding = last_embedding.element;
                         int embedding_size = last_embedding.get_size();
 
-                        ESP_LOGI(TAG, "🎉 FIRST FACE ENROLLED: ID %d (Embedding size: %d)", stored_face_id, embedding_size);
-                        frame_show_state = SHOW_STATE_ENROLL;
-                        
-                        // Log with real embedding, no image data
-                        csv_logger_log_face(stored_face_id, face_embedding, embedding_size, csv_gps, NULL, 0);
-                        
-                        s_last_detection_us = esp_timer_get_time();
-                        csv_uploader_trigger_now();
+                        // Validate initial enrollment
+                        bool is_valid = true;
+                        float sum_sq = 0;
+                        if (face_embedding) {
+                             for (int i = 0; i < embedding_size; i++) {
+                                 if (isnan(face_embedding[i]) || isinf(face_embedding[i])) {
+                                     is_valid = false;
+                                     break;
+                                 }
+                                 sum_sq += face_embedding[i] * face_embedding[i];
+                             }
+                             if (sum_sq < 1e-6) is_valid = false;
+                        } else {
+                             is_valid = false;
+                        }
+
+                        if (is_valid) {
+                            ESP_LOGI(TAG, "🎉 FIRST FACE ENROLLED: ID %d (Embedding size: %d, Norm: %.4f)", stored_face_id, embedding_size, sum_sq);
+                            frame_show_state = SHOW_STATE_ENROLL;
+                            
+                            // Log with real embedding, no image data
+                            csv_logger_log_face(stored_face_id, face_embedding, embedding_size, csv_gps, NULL, 0);
+                            
+                            s_last_detection_us = esp_timer_get_time();
+                            csv_uploader_trigger_now();
+                        } else {
+                            ESP_LOGE(TAG, "❌ First enrollment failed: Invalid embedding. Deleting...");
+                            recognizer->delete_id(true);
+                            stored_face_id = -1;
+                        }
                     }
                     else
                     {
                         // Face recognition for subsequent detections
                         recognize_result = recognizer->recognize((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, detect_results.front().keypoint);
                         
-                        // EXTRACT EMBEDDING AFTER RECOGNITION
-                        Tensor<float> &last_embedding = recognizer->get_face_emb(-1);
-                        float *face_embedding = last_embedding.element;
-                        int embedding_size = last_embedding.get_size();
-
                         ESP_LOGI(TAG, "RECOGNIZE: Similarity: %f, Match ID: %d, Threshold: %f", 
                                  recognize_result.similarity, recognize_result.id, SIMILARITY_THRESHOLD);
                         
+                        // Check if similarity is NaN (invalid comparison)
+                        if (isnan(recognize_result.similarity)) {
+                            ESP_LOGE(TAG, "❌ Similarity is NaN! Match ID: %d", recognize_result.id);
+                            
+                            // SELF-HEALING: If current face embedding is valid but similarity is NaN, 
+                            // it means the enrolled face is likely corrupted.
+                            Tensor<float> &curr_emb = recognizer->get_face_emb(-1);
+                            bool curr_valid = false;
+                            if (curr_emb.element) {
+                                float c_sum_sq = 0;
+                                for (int i = 0; i < curr_emb.get_size(); i++) {
+                                    if (!isnan(curr_emb.element[i]) && !isinf(curr_emb.element[i]))
+                                        c_sum_sq += curr_emb.element[i] * curr_emb.element[i];
+                                }
+                                if (c_sum_sq > 1e-6) curr_valid = true;
+                            }
+
+                            if (curr_valid) {
+                                ESP_LOGW(TAG, "⚠️ Current frame has valid face, but comparison with ID %d failed. Clearing cache...", recognize_result.id);
+                                while (recognizer->get_enrolled_id_num() > 0) {
+                                    recognizer->delete_id(true);
+                                }
+                                stored_face_id = -1;
+                            } else {
+                                ESP_LOGD(TAG, "Ignoring frame: current detection produced invalid embedding.");
+                            }
+                            
+                            frame_show_state = SHOW_STATE_IDLE; 
+                        }
                         // Check if similarity is above threshold (Same person)
-                        if (!isnan(recognize_result.similarity) && recognize_result.similarity >= SIMILARITY_THRESHOLD) {
+                        else if (recognize_result.similarity >= SIMILARITY_THRESHOLD) {
                             ESP_LOGI(TAG, "⏭️ DUPLICATE FACE - Similarity: %.3f. Skipping upload.", recognize_result.similarity);
                             frame_show_state = SHOW_STATE_RECOGNIZE;
                             // DON'T log, DON'T upload
@@ -314,19 +403,40 @@ static void task_process_handler(void *arg)
                             // 2. Enroll the new face
                             recognizer->enroll_id((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, detect_results.front().keypoint, "", true);
                             stored_face_id = recognizer->get_enrolled_ids().back().id;
-                            faces_enrolled++;
                             
                             // 3. Extract the fingerprint (embedding)
                             Tensor<float> &new_embedding = recognizer->get_face_emb(-1);
                             
-                            ESP_LOGI(TAG, "🔄 LOCAL CACHE UPDATED: ID %d. Sending to server...", stored_face_id);
-                            frame_show_state = SHOW_STATE_ENROLL;
+                            // Validate new embedding
+                            bool is_valid = true;
+                            float sum_sq = 0;
+                            if (new_embedding.element) {
+                                for (int i = 0; i < new_embedding.get_size(); i++) {
+                                    if (isnan(new_embedding.element[i]) || isinf(new_embedding.element[i])) {
+                                        is_valid = false;
+                                        break;
+                                    }
+                                    sum_sq += new_embedding.element[i] * new_embedding.element[i];
+                                }
+                                if (sum_sq < 1e-6) is_valid = false;
+                            } else {
+                                is_valid = false;
+                            }
 
-                            // 4. Log and trigger upload for the NEW person
-                            csv_logger_log_face(stored_face_id, new_embedding.element, new_embedding.get_size(), csv_gps, NULL, 0);
-                            csv_uploader_trigger_now();
-                            
-                            s_last_detection_us = esp_timer_get_time();
+                            if (is_valid) {
+                                ESP_LOGI(TAG, "🔄 LOCAL CACHE UPDATED: ID %d. Sending to server...", stored_face_id);
+                                frame_show_state = SHOW_STATE_ENROLL;
+
+                                // 4. Log and trigger upload for the NEW person
+                                csv_logger_log_face(stored_face_id, new_embedding.element, new_embedding.get_size(), csv_gps, NULL, 0);
+                                csv_uploader_trigger_now();
+                                
+                                s_last_detection_us = esp_timer_get_time();
+                            } else {
+                                ESP_LOGE(TAG, "❌ New enrollment ID %d produced invalid embedding. Deleting.", stored_face_id);
+                                recognizer->delete_id(stored_face_id, true);
+                                stored_face_id = -1;
+                            }
                         }
                     }
                 }

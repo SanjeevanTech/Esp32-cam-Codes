@@ -220,14 +220,25 @@ static esp_err_t fetch_power_config(power_config_cache_t *config) {
                     cJSON *trip_windows_array = cJSON_GetObjectItem(root, "trip_windows");
                     cJSON *server_time = cJSON_GetObjectItem(root, "current_server_time");
 
-                    // Sync time from server if available (fallback for NTP)
+                    // Sync time from server ONLY if NTP hasn't worked yet
                     if (server_time && server_time->valuestring) {
-                        struct tm tm;
-                        strptime(server_time->valuestring, "%Y-%m-%d %H:%M:%S", &tm);
-                        time_t t = mktime(&tm);
-                        struct timeval now = { .tv_sec = t };
-                        settimeofday(&now, NULL);
-                        ESP_LOGI(TAG, "⏰ Synced time from server: %s", server_time->valuestring);
+                        time_t now_c;
+                        time(&now_c);
+                        if (now_c < 1704067200) { // Only sync if clock is still in 1970/2024
+                            struct tm tm;
+                            memset(&tm, 0, sizeof(struct tm));
+                            if (strptime(server_time->valuestring, "%Y-%m-%d %H:%M:%S", &tm)) {
+                                // Server time is UTC. mktime() uses current local TZ (IST-5:30).
+                                // To get the correct UTC timestamp:
+                                // Real UTC = mktime(&tm) + 5 hours 30 mins (19800 seconds)
+                                time_t t = mktime(&tm) + 19800;
+                                struct timeval tv = { .tv_sec = t }; 
+                                settimeofday(&tv, NULL);
+                                ESP_LOGI(TAG, "⏰ Backup time sync from server (UTC): %s", server_time->valuestring);
+                            }
+                        } else {
+                            ESP_LOGD(TAG, "Skipping server time sync (NTP already accurate)");
+                        }
                     }
                     
                     if (deep_sleep && trip_start && trip_end && maint_interval && maint_duration) {
