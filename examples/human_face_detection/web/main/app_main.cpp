@@ -256,87 +256,18 @@ extern "C" void app_main()
     vTaskDelay(pdMS_TO_TICKS(1000));
     
     // 3. Start provisioning sync (polls Node.js for WiFi/URL updates)
-    // 3. Start provisioning sync (polls Node.js for WiFi/URL updates)
-    // ALWAYS poll the AWS server for updates, even if sending logs to local
-    const char* node_url = "http://52.66.122.5:5000";
-    ESP_LOGI(TAG, "🔄 Starting Remote Provisioning Sync (%s)...", node_url);
-    provisioning_sync_init(node_url, g_device_config.bus_id);
-    
-    // Network diagnostics removed to save RAM
-    
-    // Initialize power config sync FIRST (before power management starts)
-    ESP_LOGI(TAG, "🔄 Initializing power config sync...");
-    esp_err_t sync_ret = power_config_sync_init(
-        g_device_config.server_url,      // Server URL
-        g_device_config.bus_id,           // Bus ID
-        g_device_config.device_id,        // Device ID
-        g_device_config.location_type     // Location (ENTRY/EXIT)
-    );
-    
-    if (sync_ret == ESP_OK) {
-        sync_ret = power_config_sync_start();
-        if (sync_ret == ESP_OK) {
-            // Wait for initial sync from server (up to 10 seconds)
-            // This ensures we have the correct trip hours before starting face detection
-            int sync_retry = 0;
-            while (!power_config_sync_has_valid_config() && sync_retry < 20) {
-                vTaskDelay(pdMS_TO_TICKS(500));
-                sync_retry++;
-                if (sync_retry % 4 == 0) {
-                    ESP_LOGI(TAG, "⏳ Waiting for server power schedule (%d/20)...", sync_retry);
-                }
-            }
-            
-            if (power_config_sync_has_valid_config()) {
-                ESP_LOGI(TAG, "✅ Power schedule synced from server successfully");
-            } else {
-                ESP_LOGW(TAG, "⚠️ Initial power sync timed out, using fallback defaults");
-            }
-        } else {
-            ESP_LOGW(TAG, "⚠️ Power config sync start failed: %s", esp_err_to_name(sync_ret));
-        }
+    // ONLY start provisioning if this is a fresh boot (not a deep sleep wake-up)
+    // because provisioning settings (WiFi/URLs) change very rarely (monthly).
+    esp_reset_reason_t reason = esp_reset_reason();
+    if (reason != ESP_RST_DEEPSLEEP) {
+        const char* node_url = "http://52.66.122.5:5000";
+        ESP_LOGI(TAG, "🔄 Fresh Boot: Starting Remote Provisioning Sync (%s)...", node_url);
+        provisioning_sync_init(node_url, g_device_config.bus_id);
     } else {
-        ESP_LOGW(TAG, "⚠️ Power config sync init failed: %s", esp_err_to_name(sync_ret));
+        ESP_LOGI(TAG, "💤 Wake from Sleep: Skipping monthly provisioning check for speed.");
     }
     
-    // Initialize board heartbeat system
-    ESP_LOGI(TAG, "💓 Initializing board heartbeat...");
-    esp_err_t hb_ret = board_heartbeat_init(
-        g_device_config.server_url,      // Server URL
-        g_device_config.bus_id,           // Bus ID
-        g_device_config.device_id,        // Device ID
-        g_device_config.location_type     // Location (ENTRANCE/EXIT)
-    );
-    
-    if (hb_ret == ESP_OK) {
-        hb_ret = board_heartbeat_start();
-        if (hb_ret == ESP_OK) {
-            ESP_LOGI(TAG, "✅ Board heartbeat started - will report every 60 seconds");
-        } else {
-            ESP_LOGW(TAG, "⚠️ Board heartbeat start failed: %s", esp_err_to_name(hb_ret));
-        }
-    } else {
-        ESP_LOGW(TAG, "⚠️ Board heartbeat init failed: %s", esp_err_to_name(hb_ret));
-    }
-    
-    // Initialize power management (after sync has fetched config)
-    esp_err_t power_ret = power_management_init();
-    if (power_ret == ESP_OK) {
-        ESP_LOGI(TAG, "Power management OK");
-        
-        // Set reasonable check intervals to reduce log spam
-        // Trip: 60s, Idle: 300s (5min), Maintenance: 30s, Log: 300s (5min)
-        esp_err_t interval_ret = power_mgmt_set_normal_intervals();
-        if (interval_ret == ESP_OK) {
-            ESP_LOGI(TAG, "Power management intervals configured");
-        }
-        
-        // Multi-trip schedule auto-syncs from server every 30 seconds
-        // For manual override, use power_mgmt_set_manual_override(true)
-        ESP_LOGI(TAG, "✅ Using automatic schedule from server");
-    } else {
-        ESP_LOGE(TAG, "Power management failed: %s", esp_err_to_name(power_ret));
-    }
+    // ========== END NETWORK INIT ==========
 
     // Create queues (reduced size for memory optimization)
     xQueueAIFrame = xQueueCreate(2, sizeof(camera_fb_t *));
@@ -362,25 +293,60 @@ extern "C" void app_main()
         ESP_LOGE(TAG, "GPS init failed: %s", esp_err_to_name(gps_ret));
     }
 
-    // Initialize CSV logger for in-memory storage (uploads when internet available)
+    // ========== END SYSTEM LOGGING INIT ==========
+
+    // ========== CRITICAL: STARTUP GRACE PERIOD ==========
+    // We wait BEFORE starting operational tasks to let background sync finish.
+    if (reason != ESP_RST_DEEPSLEEP) {
+        ESP_LOGI(TAG, "🔍 Manual Reset: Waiting 15s grace period for updates...");
+        vTaskDelay(pdMS_TO_TICKS(15000));
+    } else {
+        ESP_LOGI(TAG, "🔍 Sleep Wake: Waiting up to 5s for trip schedule sync...");
+        int wait_count = 0;
+        while (!power_config_sync_has_valid_config() && wait_count < 10) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            wait_count++;
+        }
+    }
+
+    // ========== START OPERATIONAL TASKS (NOW after we've waited for config) ==========
+
+    // 1. Initialize power config sync (Trip schedule)
+    ESP_LOGI(TAG, "🔄 Initializing power config sync...");
+    power_config_sync_init(
+        g_device_config.server_url,      
+        g_device_config.bus_id,           
+        g_device_config.device_id,        
+        g_device_config.location_type     
+    );
+    power_config_sync_start();
+
+    // 2. Initialize board heartbeat system
+    ESP_LOGI(TAG, "💓 Initializing board heartbeat...");
+    board_heartbeat_init(
+        g_device_config.server_url,      
+        g_device_config.bus_id,           
+        g_device_config.device_id,        
+        g_device_config.location_type     
+    );
+    board_heartbeat_start();
+
+    // 3. Initialize CSV logger & uploader
     csv_logger_config_t csv_config = {
         .device_id = g_device_config.device_id,
         .location_type = g_device_config.location_type,
         .bus_id = g_device_config.bus_id,
         .route_name = g_device_config.route_name,
-        .csv_file_path = NULL,  // Not used - in-memory buffer
-        .max_records_per_file = 10,  // In-memory buffer size
-        .upload_interval_seconds = 5  // Try upload every 5 SECONDS for real-time detection
+        .csv_file_path = NULL,
+        .max_records_per_file = 10,
+        .upload_interval_seconds = 5
     };
-    esp_err_t csv_ret = csv_logger_init(&csv_config);
-    if (csv_ret == ESP_OK) {
-        ESP_LOGI(TAG, "✅ CSV logger initialized (in-memory buffer: 10 entries)");
-        
-        // Initialize CSV uploader (will queue uploads when internet available)
+    if (csv_logger_init(&csv_config) == ESP_OK) {
+        ESP_LOGI(TAG, "✅ CSV logger initialized");
         csv_uploader_config_t uploader_config = {
             .server_url = g_device_config.server_url,
             .endpoint = "/api/face-logs",
-            .upload_interval_seconds = 5,  // Try upload every 5 SECONDS for real-time detection
+            .upload_interval_seconds = 5,
             .max_batch_size = 50,
             .max_retries = 5,
             .retry_backoff_base_ms = 1000,
@@ -388,26 +354,32 @@ extern "C" void app_main()
             .offline_buffer_size = 500,
             .enable_offline_buffering = true
         };
-        esp_err_t upload_ret = csv_uploader_init(&uploader_config);
-        if (upload_ret == ESP_OK) {
-            ESP_LOGI(TAG, "✅ CSV uploader initialized (auto-upload when online)");
+        if (csv_uploader_init(&uploader_config) == ESP_OK) {
             csv_uploader_start();
-        } else {
-            ESP_LOGW(TAG, "CSV uploader init failed: %s", esp_err_to_name(upload_ret));
+            ESP_LOGI(TAG, "✅ CSV uploader started");
         }
-    } else {
-        ESP_LOGE(TAG, "CSV logger init failed: %s", esp_err_to_name(csv_ret));
     }
 
-    // Register camera (3 buffers for stable frame capture - matches camera fix)
+    // Initialize power management (NOW after we've waited for sync)
+    esp_err_t power_ret = power_management_init();
+    if (power_ret == ESP_OK) {
+        ESP_LOGI(TAG, "Power management OK");
+        
+        // Set reasonable check intervals to reduce log spam
+        esp_err_t interval_ret = power_mgmt_set_normal_intervals();
+        if (interval_ret == ESP_OK) {
+            ESP_LOGI(TAG, "Power management intervals configured");
+        }
+        
+        ESP_LOGI(TAG, "✅ Using automatic schedule from server");
+    } else {
+        ESP_LOGE(TAG, "Power management failed: %s", esp_err_to_name(power_ret));
+    }
+
+    // Register camera (3 buffers for stable frame capture)
     register_camera(PIXFORMAT_RGB565, FRAMESIZE_QVGA, 3, xQueueAIFrame);
     ESP_LOGI(TAG, "Camera OK");
-    
-    // ========== CRITICAL: CHECK TRIP TIME BEFORE STARTING FACE DETECTION ==========
-    // If we're outside trip hours, enter deep sleep immediately to save power
-    // This prevents the bug where face detection runs outside of scheduled trips
-    ESP_LOGI(TAG, "🔍 Checking if current time is within trip hours...");
-    
+
     if (!power_mgmt_is_trip_time()) {
         time_t now;
         struct tm timeinfo;
@@ -415,17 +387,12 @@ extern "C" void app_main()
         localtime_r(&now, &timeinfo);
         
         ESP_LOGI(TAG, "--------------------------------------------------");
-        ESP_LOGI(TAG, "⏰ Trip Status: [Before Deep Sleep Condition]");
-        ESP_LOGI(TAG, "   Currect Time: %02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-        ESP_LOGI(TAG, "   Condition: OUTSIDE TRIP HOURS");
-        ESP_LOGI(TAG, "   Face detection DISABLED. Entering deep sleep.");
+        ESP_LOGI(TAG, "⏰ Status: OFF-TRIP (Ready to Sleep)");
+        ESP_LOGI(TAG, "   Time: %02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
         ESP_LOGI(TAG, "--------------------------------------------------");
         
         vTaskDelay(pdMS_TO_TICKS(1000));
         enter_deep_sleep();
-        
-        // If we return from deep sleep (shouldn't happen), restart
-        esp_restart();
         return;
     }
     

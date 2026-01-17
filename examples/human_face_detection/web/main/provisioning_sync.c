@@ -44,11 +44,11 @@ static void provisioning_task(void *pvParameters) {
     }
 
     while (1) {
-        // Wait 10 seconds for network to be fully ready on first boot, 
+        // Wait 2 seconds for network to be fully ready on first boot, 
         // then 5 minutes between subsequent checks
         static bool first_check = true;
         if (first_check) {
-            vTaskDelay(pdMS_TO_TICKS(5000));
+            vTaskDelay(pdMS_TO_TICKS(2000));
             first_check = false;
         } else {
             vTaskDelay(pdMS_TO_TICKS(300000));
@@ -82,13 +82,26 @@ static void provisioning_task(void *pvParameters) {
                     device_config_t current_cfg;
                     device_config_load(&current_cfg);
 
+                    ESP_LOGI(TAG, "Comparing Received Config vs Local Config:");
+                    ESP_LOGI(TAG, "  SSID: [%s] vs [%s]", ssid->valuestring, current_cfg.wifi_ssid);
+                    ESP_LOGI(TAG, "  URL:  [%s] vs [%s]", url_json->valuestring, current_cfg.server_url);
+
                     bool changed = false;
-                    if (strcmp(current_cfg.wifi_ssid, ssid->valuestring) != 0) changed = true;
-                    if (strcmp(current_cfg.wifi_password, pass->valuestring) != 0) changed = true;
-                    if (strcmp(current_cfg.server_url, url_json->valuestring) != 0) changed = true;
+                    if (strcmp(current_cfg.wifi_ssid, ssid->valuestring) != 0) {
+                        ESP_LOGI(TAG, "  >> SSID Change Detected!");
+                        changed = true;
+                    }
+                    if (strcmp(current_cfg.wifi_password, pass->valuestring) != 0) {
+                        ESP_LOGI(TAG, "  >> Password Change Detected!");
+                        changed = true;
+                    }
+                    if (strcmp(current_cfg.server_url, url_json->valuestring) != 0) {
+                        ESP_LOGI(TAG, "  >> Server URL Change Detected!");
+                        changed = true;
+                    }
 
                     if (changed) {
-                        ESP_LOGI(TAG, "🔄 New configuration detected! Saving and restarting...");
+                        ESP_LOGI(TAG, "🔄 APPLYING CHANGES & RESTARTING...");
                         strncpy(current_cfg.wifi_ssid, ssid->valuestring, 31);
                         strncpy(current_cfg.wifi_password, pass->valuestring, 63);
                         strncpy(current_cfg.server_url, url_json->valuestring, 127);
@@ -96,7 +109,11 @@ static void provisioning_task(void *pvParameters) {
                         device_config_save(&current_cfg);
                         vTaskDelay(pdMS_TO_TICKS(2000));
                         esp_restart();
+                    } else {
+                        ESP_LOGI(TAG, "✅ No configuration changes required.");
                     }
+                } else {
+                    ESP_LOGW(TAG, "⚠️ Received JSON but missing required fields (ssid/pass/url)");
                 }
                 cJSON_Delete(root);
             }
