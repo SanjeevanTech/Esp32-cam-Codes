@@ -2,11 +2,18 @@
 build/
 sdkconfig
 sdkconfig.old
+sdkconfig.temp
+managed_components/
+dependencies.lock
 
 # Python byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# GDB history
+.gdb_history
+.gdbinit
 
 # Local configuration file (contains passwords/sensitive data)
 local_settings.py
@@ -16,7 +23,10 @@ local_settings.py
 .idea/
 *.swp
 *.swo
+.DS_Store
 
-# Project specific
-managed_components/
-dependencies.lock
+# Temporary / Log files
+*.log
+*.bak
+*.tmp
+node_modules/

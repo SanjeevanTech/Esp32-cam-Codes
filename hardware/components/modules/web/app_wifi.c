@@ -101,7 +101,7 @@ void wifi_init_sta()
 void wifi_recovery_task(void *pvParameters)
 {
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(300000)); // Check every 5 minutes
+        vTaskDelay(pdMS_TO_TICKS(10000)); // Check every 10 seconds (aggressively reconnect)
         
         wifi_ap_record_t ap_info;
         if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK) {

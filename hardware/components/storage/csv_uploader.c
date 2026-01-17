@@ -4,6 +4,7 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_wifi.h"
+#include "tcpip_adapter.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -209,7 +210,7 @@ static esp_err_t upload_logs_to_server(face_log_entry_t* logs, int count)
         .buffer_size_tx = 16384,
         .disable_auto_redirect = false,  // Enable redirects
         .max_redirection_count = 3,      // Allow up to 3 redirects
-        .keep_alive_enable = true,
+        .keep_alive_enable = false,  // Disable keep-alive to prevent stale connections
         .keep_alive_idle = 10,
         .keep_alive_interval = 5,
         .keep_alive_count = 3,
@@ -237,13 +238,21 @@ static esp_err_t upload_logs_to_server(face_log_entry_t* logs, int count)
     if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK) {
         ESP_LOGW(TAG, "WiFi not connected, cannot upload logs");
         esp_http_client_cleanup(client);
-        if (json_string) {
-            free(json_string);
-        }
-        if (root) {
-            cJSON_Delete(root);
-        }
+        if (json_string) free(json_string);
+        if (root) cJSON_Delete(root);
         update_status_error("WiFi not connected");
+        return ESP_ERR_WIFI_NOT_INIT;
+    }
+
+    // Check for valid IP address
+    tcpip_adapter_ip_info_t ip_info;
+    tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+    if (ip_info.ip.addr == 0) {
+        ESP_LOGW(TAG, "WiFi associated but no IP address, cannot upload logs");
+        esp_http_client_cleanup(client);
+        if (json_string) free(json_string);
+        if (root) cJSON_Delete(root);
+        update_status_error("No IP address");
         return ESP_ERR_WIFI_NOT_INIT;
     }
     

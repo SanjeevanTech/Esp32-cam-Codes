@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_wifi.h"
+#include "tcpip_adapter.h"
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
@@ -130,6 +131,14 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
  */
 static esp_err_t fetch_power_config(power_config_cache_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
+
+    // Check WiFi connectivity and IP
+    tcpip_adapter_ip_info_t ip_info;
+    tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &ip_info);
+    if (ip_info.ip.addr == 0) {
+        ESP_LOGD(TAG, "Skipping config fetch - No IP address");
+        return ESP_ERR_WIFI_NOT_INIT;
+    }
     
     char url[256];
     snprintf(url, sizeof(url), "%s/api/power-config?bus_id=%s", g_server_url, g_bus_id);
@@ -443,8 +452,11 @@ static void power_config_sync_task(void *pvParameters) {
     while (g_sync_enabled) {
         TickType_t now = xTaskGetTickCount();
         
-        // Sync configuration every 30 seconds
-        if ((now - last_sync) >= pdMS_TO_TICKS(SYNC_INTERVAL_MS)) {
+        // Check if it's time to sync
+        // Adaptive interval: 5 seconds if no config yet, SYNC_INTERVAL_MS otherwise
+        uint32_t current_interval = g_cached_config.valid ? SYNC_INTERVAL_MS : 5000;
+        
+        if ((now - last_sync) >= pdMS_TO_TICKS(current_interval)) {
             power_config_cache_t new_config = {0};
             
             if (fetch_power_config(&new_config) == ESP_OK) {
@@ -462,7 +474,13 @@ static void power_config_sync_task(void *pvParameters) {
                     ESP_LOGD(TAG, "ℹ️ Configuration unchanged");
                 }
             } else {
-                ESP_LOGW(TAG, "⚠️ Failed to fetch configuration (server offline?)");
+                // Only log warning if we have a valid config (maintenance mode)
+                // If starting up, keep it slightly quieter as we retry frequently
+                if (g_cached_config.valid) {
+                    ESP_LOGW(TAG, "⚠️ Failed to fetch configuration (server offline?)");
+                } else {
+                     ESP_LOGD(TAG, "Waiting for server/network...");
+                }
             }
             
             last_sync = now;

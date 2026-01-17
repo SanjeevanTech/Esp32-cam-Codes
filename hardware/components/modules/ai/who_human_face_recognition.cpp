@@ -297,42 +297,36 @@ static void task_process_handler(void *arg)
                         ESP_LOGI(TAG, "RECOGNIZE: Similarity: %f, Match ID: %d, Threshold: %f", 
                                  recognize_result.similarity, recognize_result.id, SIMILARITY_THRESHOLD);
                         
-                        // Check if similarity is above threshold
+                        // Check if similarity is above threshold (Same person)
                         if (!isnan(recognize_result.similarity) && recognize_result.similarity >= SIMILARITY_THRESHOLD) {
-                            ESP_LOGI(TAG, "✅ FACE MATCHED - Similarity: %.3f", recognize_result.similarity);
+                            ESP_LOGI(TAG, "⏭️ DUPLICATE FACE - Similarity: %.3f. Skipping upload.", recognize_result.similarity);
                             frame_show_state = SHOW_STATE_RECOGNIZE;
-                            
-                            // Log matching event with real embedding
-                            csv_logger_log_face(recognize_result.id, face_embedding, embedding_size, csv_gps, NULL, 0);
-                            csv_uploader_trigger_now();
+                            // DON'T log, DON'T upload
                         } else {
-                            // Different person detected (low similarity)
-                            ESP_LOGW(TAG, "🆕 NEW PERSON DETECTED (Similarity too low: %.3f)", recognize_result.similarity);
+                            // Different person detected (low similarity) - IMMEDIATELY REPLACE AND SEND
+                            ESP_LOGW(TAG, "🆕 NEW PERSON DETECTED (Similarity: %.3f)", recognize_result.similarity);
                             
-                            int64_t now_us = esp_timer_get_time();
-                            // Implementation of 30-second throttle for new person enrollment
-                            if ((now_us - s_last_detection_us) >= (30 * 1000 * 1000)) {
-                                // Clear old and enroll new
-                                while (recognizer->get_enrolled_id_num() > 0) recognizer->delete_id(true);
-                                
-                                recognizer->enroll_id((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, detect_results.front().keypoint, "", true);
-                                stored_face_id = recognizer->get_enrolled_ids().back().id;
-                                faces_enrolled++;
-                                
-                                // RE-EXTRACT AFTER NEW ENROLLMENT
-                                Tensor<float> &new_embedding = recognizer->get_face_emb(-1);
-                                
-                                ESP_LOGI(TAG, "🔄 REPLACED FACE: ID %d", stored_face_id);
-                                frame_show_state = SHOW_STATE_ENROLL;
-
-                                // Log new face with embedding
-                                csv_logger_log_face(stored_face_id, new_embedding.element, new_embedding.get_size(), csv_gps, NULL, 0);
-                                
-                                s_last_detection_us = now_us;
-                                csv_uploader_trigger_now();
-                            } else {
-                                ESP_LOGW(TAG, "Throttling new face detection (cooldown active)");
+                            // 1. Clear the old local face
+                            while (recognizer->get_enrolled_id_num() > 0) {
+                                recognizer->delete_id(true);
                             }
+                            
+                            // 2. Enroll the new face
+                            recognizer->enroll_id((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, detect_results.front().keypoint, "", true);
+                            stored_face_id = recognizer->get_enrolled_ids().back().id;
+                            faces_enrolled++;
+                            
+                            // 3. Extract the fingerprint (embedding)
+                            Tensor<float> &new_embedding = recognizer->get_face_emb(-1);
+                            
+                            ESP_LOGI(TAG, "🔄 LOCAL CACHE UPDATED: ID %d. Sending to server...", stored_face_id);
+                            frame_show_state = SHOW_STATE_ENROLL;
+
+                            // 4. Log and trigger upload for the NEW person
+                            csv_logger_log_face(stored_face_id, new_embedding.element, new_embedding.get_size(), csv_gps, NULL, 0);
+                            csv_uploader_trigger_now();
+                            
+                            s_last_detection_us = esp_timer_get_time();
                         }
                     }
                 }
