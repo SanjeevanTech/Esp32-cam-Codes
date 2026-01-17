@@ -32,7 +32,9 @@ static void set_default_config(device_config_t* config) {
     strcpy(config->route_name, "AUTO_DETECT");
     strcpy(config->device_id, "ESP32_CAM_ENTRANCE_001");
     strcpy(config->location_type, "ENTRY");
-    strcpy(config->server_url, "http://10.192.150.50:8888");
+    strcpy(config->server_url, "http://52.66.122.5:8888");
+    strcpy(config->wifi_ssid, "Sanjeevan");
+    strcpy(config->wifi_password, "12345678");
 }
 
 esp_err_t device_config_init(device_config_t* config) {
@@ -57,6 +59,7 @@ esp_err_t device_config_init(device_config_t* config) {
     ESP_LOGI(TAG, "  Device: %s", config->device_id);
     ESP_LOGI(TAG, "  Type: %s", config->location_type);
     ESP_LOGI(TAG, "  Server: %s", config->server_url);
+    ESP_LOGI(TAG, "  WiFi SSID: %s", config->wifi_ssid);
     ESP_LOGI(TAG, "═══════════════════════════════════════");
     
     return ESP_OK;

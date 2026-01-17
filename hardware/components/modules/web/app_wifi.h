@@ -44,7 +44,7 @@ extern "C" {
  * - WIFI_AP_SSID: ESP32 hotspot name
  * - WIFI_AP_PASSWORD: ESP32 hotspot password
  */
-void app_wifi_main();
+void app_wifi_main(const char* ssid, const char* password);
 
 #ifdef __cplusplus
 }

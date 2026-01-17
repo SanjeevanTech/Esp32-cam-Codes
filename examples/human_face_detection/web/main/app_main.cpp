@@ -25,6 +25,7 @@
 #include "esp_task_wdt.h"
 #include "power_config_sync.h"
 #include "board_heartbeat.h"
+#include "provisioning_sync.h"
 
 // Fixed power management integration
 extern "C" {
@@ -207,14 +208,14 @@ extern "C" void app_main()
     esp_log_level_set("CSV_UPLOADER", ESP_LOG_INFO);
     esp_log_level_set("who_camera", ESP_LOG_ERROR);
     
-    // Device configuration initialization (Silent)
+    // 1. Device configuration initialization (ESSENTIAL for WiFi)
     esp_err_t config_ret = device_config_load(&g_device_config);
     if (config_ret != ESP_OK) {
         device_config_init(&g_device_config);
     }
     
-    // Initialize WiFi and mDNS
-    app_wifi_main();
+    // 2. Initialize WiFi with credentials from NVS
+    app_wifi_main(g_device_config.wifi_ssid, g_device_config.wifi_password);
     app_mdns_main();
     
     // Initialize NTP
@@ -240,6 +241,16 @@ extern "C" void app_main()
     
     // Wait for network to stabilize
     vTaskDelay(pdMS_TO_TICKS(1000));
+    
+    // 3. Start provisioning sync (polls Node.js for WiFi/URL updates)
+    // Assuming Node.js is on port 5000 of the same host as Python (8888)
+    char node_url[128];
+    strncpy(node_url, g_device_config.server_url, sizeof(node_url)-1);
+    char* port_ptr = strstr(node_url, ":8888");
+    if (port_ptr) {
+        strcpy(port_ptr, ":5000");
+    }
+    provisioning_sync_init(node_url, g_device_config.bus_id);
     
     // Network diagnostics removed to save RAM
     

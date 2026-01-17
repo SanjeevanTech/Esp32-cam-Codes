@@ -42,13 +42,13 @@
  * ========================================
  */
 
-// Station Mode (Connect to existing WiFi)
-#define WIFI_SSID          "Sanjeevan" // Your WiFi network name
-#define WIFI_PASSWORD      "12345678"  // Your WiFi password
+// No longer using hardcoded macros here - passed via app_wifi_main
 #define WIFI_MAXIMUM_RETRY  5          // Max connection retries
 
 static const char *TAG = "camera wifi";
 static int s_retry_num = 0;
+static char current_ssid[32] = {0};
+static char current_password[64] = {0};
 
 static esp_err_t event_handler(void *ctx, system_event_t *event)
 {
@@ -74,8 +74,6 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
         {
             ESP_LOGW(TAG, "WiFi unstable (5 failures). Entering OFFLINE MODE.");
             ESP_LOGW(TAG, "Logs will be buffered and sent once WiFi is stable again.");
-            // We don't call esp_wifi_connect() here to allow system to run smoothly offline.
-            // A separate task or the next periodic attempt will trigger reconnection.
         }
         break;
     }
@@ -86,16 +84,16 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
     return ESP_OK;
 }
 
-void wifi_init_sta()
+void wifi_init_sta(const char* ssid, const char* password)
 {
     wifi_config_t wifi_config;
     memset(&wifi_config, 0, sizeof(wifi_config_t));
-    snprintf((char *)wifi_config.sta.ssid, 32, "%s", WIFI_SSID);
-    snprintf((char *)wifi_config.sta.password, 64, "%s", WIFI_PASSWORD);
+    snprintf((char *)wifi_config.sta.ssid, 32, "%s", ssid);
+    snprintf((char *)wifi_config.sta.password, 64, "%s", password);
 
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
 
-    ESP_LOGI(TAG, "📡 Connecting to WiFi - SSID: %s", WIFI_SSID);
+    ESP_LOGI(TAG, "📡 Connecting to WiFi - SSID: %s", ssid);
 }
 
 void wifi_recovery_task(void *pvParameters)
@@ -108,14 +106,15 @@ void wifi_recovery_task(void *pvParameters)
             ESP_LOGI(TAG, "📡 Periodic WiFi check: Still offline. Resetting retries and attempting reconnection...");
             s_retry_num = 0;
             esp_wifi_connect();
-        } else {
-            ESP_LOGD(TAG, "📡 Periodic WiFi check: Connected");
         }
     }
 }
 
-void app_wifi_main()
+void app_wifi_main(const char* ssid, const char* password)
 {
+    if (ssid) strncpy(current_ssid, ssid, 31);
+    if (password) strncpy(current_password, password, 63);
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     wifi_mode_t mode = WIFI_MODE_STA;
 
@@ -132,7 +131,7 @@ void app_wifi_main()
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_mode(mode));
 
-    wifi_init_sta();
+    wifi_init_sta(current_ssid, current_password);
     
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));

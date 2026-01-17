@@ -17,6 +17,8 @@ typedef struct {
     char device_id[32];       // This device ID (e.g., "ESP32_CAM_ENTRANCE_001")
     char location_type[16];   // Camera location: "ENTRY" or "EXIT"
     char server_url[128];     // Python backend URL
+    char wifi_ssid[32];       // WiFi SSID
+    char wifi_password[64];   // WiFi Password
 } device_config_t;
 
 // ============================================================
