@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include "esp_log.h"
 #include "esp_system.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -207,11 +208,23 @@ extern "C" void app_main()
     esp_log_level_set("CSV_LOGGER", ESP_LOG_INFO);
     esp_log_level_set("CSV_UPLOADER", ESP_LOG_INFO);
     esp_log_level_set("who_camera", ESP_LOG_ERROR);
+    esp_log_level_set("PROV_SYNC", ESP_LOG_INFO);
     
+    // 0. Initialize NVS (REQUIRED before loading config)
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
     // 1. Device configuration initialization (ESSENTIAL for WiFi)
     esp_err_t config_ret = device_config_load(&g_device_config);
     if (config_ret != ESP_OK) {
+        ESP_LOGW("APP_MAIN", "Failed to load config, using defaults");
         device_config_init(&g_device_config);
+    } else {
+        ESP_LOGI("APP_MAIN", "Config loaded successfully");
     }
     
     // 2. Initialize WiFi with credentials from NVS
@@ -243,13 +256,10 @@ extern "C" void app_main()
     vTaskDelay(pdMS_TO_TICKS(1000));
     
     // 3. Start provisioning sync (polls Node.js for WiFi/URL updates)
-    // Assuming Node.js is on port 5000 of the same host as Python (8888)
-    char node_url[128];
-    strncpy(node_url, g_device_config.server_url, sizeof(node_url)-1);
-    char* port_ptr = strstr(node_url, ":8888");
-    if (port_ptr) {
-        strcpy(port_ptr, ":5000");
-    }
+    // 3. Start provisioning sync (polls Node.js for WiFi/URL updates)
+    // ALWAYS poll the AWS server for updates, even if sending logs to local
+    const char* node_url = "http://52.66.122.5:5000";
+    ESP_LOGI(TAG, "🔄 Starting Remote Provisioning Sync (%s)...", node_url);
     provisioning_sync_init(node_url, g_device_config.bus_id);
     
     // Network diagnostics removed to save RAM

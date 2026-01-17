@@ -73,6 +73,7 @@ esp_err_t device_config_save(const device_config_t* config) {
         return err;
     }
     
+    ESP_LOGI(TAG, "Saving config to NVS: SSID=%s, URL=%s", config->wifi_ssid, config->server_url);
     err = nvs_set_blob(nvs_handle, "config", config, sizeof(device_config_t));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "NVS save error: %s", esp_err_to_name(err));
@@ -87,11 +88,19 @@ esp_err_t device_config_load(device_config_t* config) {
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
+        ESP_LOGW(TAG, "NVS open failed (first run?): %s", esp_err_to_name(err));
         return err;
     }
     
     size_t size = sizeof(device_config_t);
     err = nvs_get_blob(nvs_handle, "config", config, &size);
+    
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Loaded config from NVS: SSID=%s, URL=%s", config->wifi_ssid, config->server_url);
+    } else {
+        ESP_LOGW(TAG, "Failed to load blob: %s", esp_err_to_name(err));
+    }
+    
     nvs_close(nvs_handle);
     
     return err;

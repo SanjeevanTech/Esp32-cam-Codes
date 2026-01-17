@@ -27,7 +27,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
 }
 
 static void provisioning_task(void *pvParameters) {
-    ESP_LOGI(TAG, "Provisioning task started. Polling: %s/api/device-config/get?bus_id=%s", g_node_server_url, g_bus_id);
+    ESP_LOGI(TAG, "🚀 Provisioning task ENTERED. Wait 10s for first check...");
     
     char *response_buffer = malloc(1024);
     if (!response_buffer) {
@@ -37,8 +37,17 @@ static void provisioning_task(void *pvParameters) {
     }
 
     while (1) {
-        // Wait 5 minutes between checks (reduce server load)
-        vTaskDelay(pdMS_TO_TICKS(300000));
+        // Wait 10 seconds for network to be fully ready on first boot, 
+        // then 5 minutes between subsequent checks
+        static bool first_check = true;
+        if (first_check) {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            first_check = false;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(300000));
+        }
+        
+        ESP_LOGI(TAG, "🔍 Checking for updates at %s...", g_node_server_url);
 
         memset(response_buffer, 0, 1024);
         char url[256];
@@ -83,6 +92,10 @@ static void provisioning_task(void *pvParameters) {
                 }
                 cJSON_Delete(root);
             }
+        } else {
+            ESP_LOGW(TAG, "❌ Failed to fetch updates: %s (Status: %d)", 
+                     esp_err_to_name(err), esp_http_client_get_status_code(client));
+            ESP_LOGI(TAG, "   Checking at: %s", url);
         }
         esp_http_client_cleanup(client);
     }
@@ -93,6 +106,10 @@ esp_err_t provisioning_sync_init(const char* node_server_url, const char* bus_id
     strncpy(g_node_server_url, node_server_url, sizeof(g_node_server_url) - 1);
     strncpy(g_bus_id, bus_id, sizeof(g_bus_id) - 1);
     
-    xTaskCreate(provisioning_task, "prov_sync", 4096, NULL, 5, NULL);
+    BaseType_t ret = xTaskCreatePinnedToCore(provisioning_task, "prov_sync", 4096, NULL, 5, NULL, 1);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "❌ Failed to create provisioning task! (No memory)");
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
