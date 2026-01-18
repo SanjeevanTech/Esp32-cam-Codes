@@ -220,11 +220,15 @@ extern "C" void app_main()
 
     // 1. Device configuration initialization (ESSENTIAL for WiFi)
     esp_err_t config_ret = device_config_load(&g_device_config);
-    if (config_ret != ESP_OK) {
-        ESP_LOGW("APP_MAIN", "Failed to load config, using defaults");
+    if (config_ret != ESP_OK || strlen(g_device_config.wifi_ssid) == 0) {
+        if (config_ret == ESP_OK) {
+            ESP_LOGW("APP_MAIN", "Loaded config is invalid (SSID empty), resetting to defaults");
+        } else {
+            ESP_LOGW("APP_MAIN", "Failed to load config, using defaults");
+        }
         device_config_init(&g_device_config);
     } else {
-        ESP_LOGI("APP_MAIN", "Config loaded successfully");
+        ESP_LOGI("APP_MAIN", "Config loaded successfully (SSID: %s)", g_device_config.wifi_ssid);
     }
     
     // 2. Initialize WiFi with credentials from NVS
