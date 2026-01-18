@@ -36,7 +36,7 @@ void *app_camera_decode(camera_fb_t *fb)
     }
     else
     {
-        uint8_t *image_ptr = (uint8_t *)malloc(fb->height * fb->width * 3 * sizeof(uint8_t));
+        uint8_t *image_ptr = (uint8_t *)dl::tool::malloc_aligned(fb->height * fb->width * 3, 16);
         if (image_ptr)
         {
             if (fmt2rgb888(fb->buf, fb->len, fb->format, image_ptr))

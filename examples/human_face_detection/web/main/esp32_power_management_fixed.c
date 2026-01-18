@@ -355,6 +355,13 @@ void enter_deep_sleep(void)
 static void power_management_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "🔋 Power management task started");
+    
+    // STARTUP GRACE PERIOD: Wait 30 seconds before allowing ANY deep sleep
+    // This ensures that even if sync is slow, we don't sleep immediately
+    ESP_LOGI(TAG, "🔍 Startup grace period: Staying awake for 30s...");
+    vTaskDelay(pdMS_TO_TICKS(30000));
+    ESP_LOGI(TAG, "✅ Startup grace period ended, active monitoring starting");
+
     ESP_LOGI(TAG, "⏱️ Check intervals: Trip=%ds, Idle=%ds, Maintenance=%ds, Log=%ds",
              g_power_config.trip_check_interval_sec,
              g_power_config.idle_check_interval_sec,

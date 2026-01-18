@@ -260,8 +260,6 @@ extern "C" void app_main()
     vTaskDelay(pdMS_TO_TICKS(1000));
     
     // 3. Start provisioning sync (polls Node.js for WiFi/URL updates)
-    // ONLY start provisioning if this is a fresh boot (not a deep sleep wake-up)
-    // because provisioning settings (WiFi/URLs) change very rarely (monthly).
     esp_reset_reason_t reason = esp_reset_reason();
     if (reason != ESP_RST_DEEPSLEEP) {
         const char* node_url = "http://52.66.122.5:5000";
@@ -270,6 +268,26 @@ extern "C" void app_main()
     } else {
         ESP_LOGI(TAG, "💤 Wake from Sleep: Skipping monthly provisioning check for speed.");
     }
+    
+    // 4. Start Power Config Sync & Heartbeat IMMEDIATELY after WiFi
+    // This allows them to run in the background while GPS and other systems initialize
+    ESP_LOGI(TAG, "🔄 Initializing power config sync...");
+    power_config_sync_init(
+        g_device_config.server_url,      
+        g_device_config.bus_id,           
+        g_device_config.device_id,        
+        g_device_config.location_type     
+    );
+    power_config_sync_start();
+
+    ESP_LOGI(TAG, "💓 Initializing board heartbeat...");
+    board_heartbeat_init(
+        g_device_config.server_url,      
+        g_device_config.bus_id,           
+        g_device_config.device_id,        
+        g_device_config.location_type     
+    );
+    board_heartbeat_start();
     
     // ========== END NETWORK INIT ==========
 
@@ -299,43 +317,28 @@ extern "C" void app_main()
 
     // ========== END SYSTEM LOGGING INIT ==========
 
-    // ========== CRITICAL: STARTUP GRACE PERIOD ==========
-    // We wait BEFORE starting operational tasks to let background sync finish.
-    if (reason != ESP_RST_DEEPSLEEP) {
-        ESP_LOGI(TAG, "🔍 Manual Reset: Waiting 15s grace period for updates...");
-        vTaskDelay(pdMS_TO_TICKS(15000));
-    } else {
-        ESP_LOGI(TAG, "🔍 Sleep Wake: Waiting up to 5s for trip schedule sync...");
-        int wait_count = 0;
-        while (!power_config_sync_has_valid_config() && wait_count < 10) {
-            vTaskDelay(pdMS_TO_TICKS(500));
-            wait_count++;
+    // ========== CRITICAL: STARTUP SYNC WAIT ==========
+    // We wait for the first power config sync to complete so we have the correct schedule.
+    ESP_LOGI(TAG, "🔍 Waiting for trip schedule sync from server...");
+    int wait_limit = (reason == ESP_RST_DEEPSLEEP) ? 20 : 40; // Wait up to 10s or 20s
+    int wait_count = 0;
+    while (!power_config_sync_has_valid_config() && wait_count < wait_limit) {
+        if (wait_count % 4 == 0) {
+            ESP_LOGI(TAG, "⏳ Syncing schedule... (%ds/%ds)", wait_count/2, wait_limit/2);
         }
+        vTaskDelay(pdMS_TO_TICKS(500));
+        wait_count++;
+    }
+
+    if (power_config_sync_has_valid_config()) {
+        ESP_LOGI(TAG, "✅ Trip schedule synchronized successfully");
+    } else {
+        ESP_LOGW(TAG, "⚠️ Schedule sync timed out - using last known or defaults");
     }
 
     // ========== START OPERATIONAL TASKS (NOW after we've waited for config) ==========
 
-    // 1. Initialize power config sync (Trip schedule)
-    ESP_LOGI(TAG, "🔄 Initializing power config sync...");
-    power_config_sync_init(
-        g_device_config.server_url,      
-        g_device_config.bus_id,           
-        g_device_config.device_id,        
-        g_device_config.location_type     
-    );
-    power_config_sync_start();
-
-    // 2. Initialize board heartbeat system
-    ESP_LOGI(TAG, "💓 Initializing board heartbeat...");
-    board_heartbeat_init(
-        g_device_config.server_url,      
-        g_device_config.bus_id,           
-        g_device_config.device_id,        
-        g_device_config.location_type     
-    );
-    board_heartbeat_start();
-
-    // 3. Initialize CSV logger & uploader
+    // 1. Initialize CSV logger & uploader
     csv_logger_config_t csv_config = {
         .device_id = g_device_config.device_id,
         .location_type = g_device_config.location_type,
