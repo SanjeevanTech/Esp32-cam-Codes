@@ -321,17 +321,20 @@ static void task_process_handler(void *arg)
                         if (recognize_result.similarity < SIMILARITY_THRESHOLD) 
                         {
                             // INSTANT NEW PERSON (Similarity < 0.5)
-                            ESP_LOGW(TAG, "🆕 NEW PERSON DETECTED (Sim: %.3f). Replacing cache...", recognize_result.similarity);
+                            ESP_LOGW(TAG, "🆕 NEW PERSON DETECTED (Sim: %.3f). Updating 1-Face Cache...", recognize_result.similarity);
                             
-                            // Wipe old local cache immediately
-                            while (recognizer->get_enrolled_id_num() > 0) recognizer->delete_id(true);
+                            // RAM CONSTRAINT: CLEAR ALL PREVIOUS FACES
+                            // We only keep the person currently in front of the camera
+                            while (recognizer->get_enrolled_id_num() > 0) {
+                                recognizer->delete_id(true);
+                            }
                             
                             // Enroll new face immediately
                             recognizer->enroll_id(aligned_face, "", true);
                             stored_face_id = recognizer->get_enrolled_ids().back().id;
                             
                             Tensor<float> &new_embedding = recognizer->get_face_emb(-1);
-                            ESP_LOGI(TAG, "🔄 NEW PASSENGER LOGGED (Instant): ID %d", stored_face_id);
+                            ESP_LOGI(TAG, "🔄 NEW PASSENGER LOGGED (ID %d) - Cache Updated", stored_face_id);
                             csv_logger_log_face(stored_face_id, new_embedding.element, new_embedding.get_size(), csv_gps, NULL, 0);
                             csv_uploader_trigger_now();
                         }
