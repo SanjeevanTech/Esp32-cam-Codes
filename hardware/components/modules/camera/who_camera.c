@@ -111,7 +111,7 @@ void register_camera(const pixformat_t pixel_fromat,
     config.pin_sscb_scl = CAMERA_PIN_SIOC;
     config.pin_pwdn = CAMERA_PIN_PWDN;
     config.pin_reset = CAMERA_PIN_RESET;
-    config.xclk_freq_hz = 8000000; // 8 MHz for stability
+    config.xclk_freq_hz = 20000000; // 20 MHz - standard for stable face recognition
     config.pixel_format = pixel_fromat;
     config.frame_size = frame_size;
     config.jpeg_quality = 30;
@@ -143,13 +143,18 @@ void register_camera(const pixformat_t pixel_fromat,
         s->set_whitebal(s, 1);        // ENABLE auto white balance
         s->set_aec2(s, 1);            // Enable AEC2 for better exposure
         
+        // Critical for face matching across different boards:
+        s->set_gainceiling(s, GAINCEILING_2X); // Limit noise in bus environment
+        s->set_bpc(s, 1);             // Black pixel cancellation
+        s->set_wpc(s, 1);             // White pixel cancellation
+        
         s->set_brightness(s, 0);      // Normal brightness
-        s->set_contrast(s, 0);        // Normal contrast
+        s->set_contrast(s, 1);        // Slightly boost contrast for better AI feature extraction
         s->set_saturation(s, 0);      // Normal saturation
         s->set_sharpness(s, 1);       // Normal sharpness
         s->set_denoise(s, 1);         // Enable noise reduction
         
-        ESP_LOGI(TAG, "📷 Camera set to AUTO mode for dynamic bus lighting");
+        ESP_LOGI(TAG, "📷 Camera set to OPTIMIZED AUTO mode for cross-device consistency");
     }
 
     xQueueFrameO = frame_o;
