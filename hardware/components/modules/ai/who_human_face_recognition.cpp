@@ -56,10 +56,29 @@ SemaphoreHandle_t xMutex;
 // Custom face recognition settings
 static bool system_reset_flag = false;  // Flag for first run after reset - DISABLED to persist faces
 static int stored_face_id = -1;        // Currently stored face ID
-// ESP-WHO FaceRecognizer uses cosine similarity on L2-normalized embeddings, range [-1, 1].
-// Default ESP-WHO thresh is 0.55. For bus QVGA lighting, same-face scores ~0.70-0.82.
-// 0.60 is the safe lower bound: catches low-light / angle variance, still rejects strangers.
-static const float SIMILARITY_THRESHOLD = 0.60f;
+// ── ON-DEVICE duplicate-skip threshold (same camera, same session) ────────────────────────
+// Purpose : decide if the person currently in front of THIS camera is the SAME person
+//           already enrolled in the 1-face RAM cache.
+// Expected same-camera same-face scores (after brightness normalisation): 0.70 – 0.85.
+// Expected different-people scores                                       : 0.15 – 0.40.
+// 0.55 gives a comfortable 0.15 margin below the same-face floor
+//      and a 0.15 margin above the stranger ceiling — no floating-point edge cases.
+//
+// WHY NOT 0.60?
+//   (a) Float formatting: "Sim: 0.600" in the log can be 0.5995–0.5999 in memory.
+//       With strict `<` comparison and threshold=0.60f the boundary is razor-thin,
+//       causing the same person to be re-enrolled every few frames.
+//   (b) A stale flash embedding (enrolled before brightness normalisation was added)
+//       produces slightly lower cosine similarity against a normalised live crop.
+//       0.55 absorbs this one-time mismatch without needing a manual flash wipe.
+//
+// ── IMPORTANT: this threshold is DIFFERENT from the backend cross-camera threshold ────────
+// The backend (simplified_bus_server.py) uses similarity_threshold = 0.60 to match the
+// ENTRY embedding (camera A) against the EXIT embedding (camera B).  Those two cameras
+// are different hardware and need a higher bar to avoid false passenger matches.
+// Do NOT raise this on-device value above 0.58 or you risk re-logging the same person.
+// ─────────────────────────────────────────────────────────────────────────────────────────
+static const float SIMILARITY_THRESHOLD = 0.55f;   // on-device duplicate-skip only
 // DETECTION_THROTTLE_US kept for log reference only (actual throttle is vTaskDelay)
 static const int64_t DETECTION_THROTTLE_US = 500 * 1000;
 
@@ -96,6 +115,61 @@ static void led_off_timer_callback(void* arg)
 {
     gpio_set_level(LED_FLASH, 0);
     ESP_LOGI(TAG, "💡 LEDs OFF");
+}
+
+/**
+ * @brief Normalize brightness of a 112x112 RGB face crop so that the global
+ *        mean pixel value equals 128.
+ *
+ * WHY THIS EXISTS:
+ *   Two OV2640 cameras from different manufacturers have different factory
+ *   AWB/AEC register defaults.  One camera may expose the face 15–25% brighter
+ *   than the other.  The INT8-quantised MobileFaceNet (S8) maps each uint8
+ *   pixel to an int8 value via  int8 = uint8 - 128.  A systematic brightness
+ *   offset shifts every input feature by the same constant, which rotates the
+ *   output embedding enough to push the cross-camera cosine similarity below
+ *   the 0.60 threshold even for the same person.
+ *
+ *   Scaling the aligned crop so its mean equals 128 makes the int8 inputs
+ *   zero-centred on BOTH cameras, dramatically reducing cross-camera embedding
+ *   variance without touching contrast or colour relationships.
+ *
+ * INPUT:  aligned_face  –  Tensor<uint8_t> {112, 112, 3}, RGB888, written by
+ *                          face_recognition_tool::align_face().
+ * OUTPUT: aligned_face pixel values are scaled in-place; norm stays uint8.
+ */
+static void normalize_face_brightness(Tensor<uint8_t> &aligned_face)
+{
+    if (!aligned_face.element) return;
+
+    const int size = aligned_face.get_size();   // 112 * 112 * 3 = 37 632
+    if (size == 0) return;
+
+    // ── Step 1: compute global mean ──────────────────────────────────────────
+    uint32_t sum = 0;
+    for (int i = 0; i < size; i++) {
+        sum += aligned_face.element[i];
+    }
+    float mean = (float)sum / (float)size;
+
+    // Guard: if the face is essentially black, skip (avoid divide-by-zero /
+    // extreme scale that would clip everything to 255).
+    if (mean < 8.0f) {
+        ESP_LOGW(TAG, "⚠️ normalize_face_brightness: mean=%.1f too dark – skip", mean);
+        return;
+    }
+
+    // ── Step 2: compute scale so that new_mean == 128 ────────────────────────
+    const float scale = 128.0f / mean;
+
+    // ── Step 3: apply scale with [0, 255] clamp ──────────────────────────────
+    for (int i = 0; i < size; i++) {
+        float val = (float)aligned_face.element[i] * scale;
+        if (val > 255.0f) val = 255.0f;
+        aligned_face.element[i] = (uint8_t)val;
+    }
+
+    ESP_LOGD(TAG, "🎨 Brightness normalised: mean %.1f → 128 (scale=%.3f)", mean, scale);
 }
 
 // Function to turn on LEDs for 1 second when face is detected (NON-BLOCKING with cooldown)
@@ -307,6 +381,12 @@ static void task_process_handler(void *arg)
                     {
                         // Case A: First person ever detected
                         face_recognition_tool::align_face((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, &aligned_face, detect_results.front().keypoint);
+                        // ── Cross-camera brightness normalisation ─────────────────────────────
+                        // Equalise mean pixel value to 128 BEFORE the model runs.
+                        // This cancels out AEC/AWB differences between the two OV2640 boards
+                        // (entry camera vs exit camera from different manufacturers).
+                        normalize_face_brightness(aligned_face);
+                        // ─────────────────────────────────────────────────────────────────────
                         recognizer->enroll_id(aligned_face, "", true);
                         stored_face_id = recognizer->get_enrolled_ids().back().id;
                         
@@ -322,20 +402,38 @@ static void task_process_handler(void *arg)
                     {
                         // Case B: Compare with current passenger
                         face_recognition_tool::align_face((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, &aligned_face, detect_results.front().keypoint);
+                        // ── Cross-camera brightness normalisation ─────────────────────────────
+                        // Same normalisation as Case A so that the on-device same-person check
+                        // (for duplicate-skip) is also performed on a brightness-normalised crop.
+                        normalize_face_brightness(aligned_face);
+                        // ─────────────────────────────────────────────────────────────────────
                         recognize_result = recognizer->recognize(aligned_face);
                         
                         if (recognize_result.similarity < SIMILARITY_THRESHOLD) 
                         {
-                            // INSTANT NEW PERSON (cosine similarity < 0.60 = different person)
-                            ESP_LOGW(TAG, "🆕 NEW PERSON DETECTED (Sim: %.3f). Updating 1-Face Cache...", recognize_result.similarity);
+                            // NEW PERSON — on-device similarity < 0.55 (different person or first frame
+                            // after a very large lighting change).
+                            // NOTE: backend cross-camera threshold is 0.60; this 0.55 is on-device only.
+                            ESP_LOGW(TAG, "🆕 NEW PERSON DETECTED (Sim: %.3f < %.2f). Updating 1-Face Cache...",
+                                     recognize_result.similarity, SIMILARITY_THRESHOLD);
                             
                             // RAM CONSTRAINT: CLEAR ALL PREVIOUS FACES
-                            // We only keep the person currently in front of the camera
+                            // We only keep the person currently in front of the camera.
+                            //
+                            // delete_id(false) = update RAM only, do NOT write NVS/flash here.
+                            // Writing flash on every loop iteration blocks Core 1 for ~50-200 ms
+                            // each call, which starves the camera DMA ring-buffer and produces
+                            // consecutive "Failed to get frame from camera" errors.
+                            // The single enroll_id(..., true) below writes the final state once.
                             while (recognizer->get_enrolled_id_num() > 0) {
-                                recognizer->delete_id(true);
+                                recognizer->delete_id(false);   // RAM-only; flash written at enroll
                             }
-                            
-                            // Enroll new face immediately
+
+                            // Brief yield so the camera task can drain its DMA buffer before the
+                            // NVS flash write (~100-300 ms) inside enroll_id blocks Core 1.
+                            vTaskDelay(pdMS_TO_TICKS(20));
+
+                            // Enroll new face immediately (aligned_face already brightness-normalised above)
                             recognizer->enroll_id(aligned_face, "", true);
                             stored_face_id = recognizer->get_enrolled_ids().back().id;
                             
@@ -347,8 +445,10 @@ static void task_process_handler(void *arg)
                         }
                         else 
                         {
-                            // SAME PERSON (Similarity >= 0.60 — same-face on QVGA bus camera)
-                            ESP_LOGI(TAG, "⏭️ DUPLICATE (Sim: %.3f, ID %d). Skipping.", recognize_result.similarity, recognize_result.id);
+                            // SAME PERSON — similarity >= 0.55 (on-device duplicate-skip threshold).
+                            // This person is already enrolled and logged; skip to avoid duplicate records.
+                            ESP_LOGI(TAG, "⏭️ DUPLICATE (Sim: %.3f >= %.2f, ID %d). Skipping.",
+                                     recognize_result.similarity, SIMILARITY_THRESHOLD, recognize_result.id);
                         }
                     }
                 }
