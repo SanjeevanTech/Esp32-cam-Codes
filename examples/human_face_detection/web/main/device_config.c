@@ -30,11 +30,11 @@ extern gps_data_t gps_get_current_data(void);
 static void set_default_config(device_config_t* config) {
     strcpy(config->bus_id, "BUS_JC_001");
     strcpy(config->route_name, "AUTO_DETECT");
-    strcpy(config->device_id, "ESP32_CAM_EXIT_001");
-    strcpy(config->location_type, "EXIT");
+    strcpy(config->device_id, "ESP32_CAM_ENTRANCE_001");
+    strcpy(config->location_type, "ENTRY");
     strcpy(config->server_url, "http://52.66.122.5:8888");
-    strcpy(config->wifi_ssid, "Sanjeevan");
-    strcpy(config->wifi_password, "12345678");
+    strcpy(config->wifi_ssid, "SATHIYA");
+    strcpy(config->wifi_password, "Sanjeevan20@");
 }
 
 esp_err_t device_config_init(device_config_t* config) {

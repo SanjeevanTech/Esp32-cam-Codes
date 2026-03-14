@@ -111,7 +111,7 @@ void register_camera(const pixformat_t pixel_fromat,
     config.pin_sscb_scl = CAMERA_PIN_SIOC;
     config.pin_pwdn = CAMERA_PIN_PWDN;
     config.pin_reset = CAMERA_PIN_RESET;
-    config.xclk_freq_hz = 20000000; // 20 MHz - standard for stable face recognition
+    config.xclk_freq_hz = 10000000; // 10 MHz - required for AI-Thinker OV2640 to fix FB-SIZE 149760 != 153600 error
     config.pixel_format = pixel_fromat;
     config.frame_size = frame_size;
     config.jpeg_quality = 30;
@@ -126,35 +126,114 @@ void register_camera(const pixformat_t pixel_fromat,
         ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
         return;
     }
-
-    sensor_t *s = esp_camera_sensor_get();
-    s->set_vflip(s, 1); // flip it back
     
-    // Auto settings for better adaptability in bus environment
+    // Verify actual frame size matches expected
+    sensor_t *s = esp_camera_sensor_get();
+    if (s == NULL) {
+        ESP_LOGE(TAG, "Failed to get sensor pointer after init");
+        return;
+    }
+    
+    // Force resolution to match what we requested
+    s->set_framesize(s, frame_size);
+    
+    // Get actual resolution
+    camera_sensor_info_t *info = esp_camera_sensor_get_info(&s->id);
+    if (info) {
+        ESP_LOGI(TAG, "📷 Camera initialized: %s (max framesize=%d)", 
+                 info->name, info->max_size);
+    }
+    
+    // Test frame capture to verify buffer size
+    camera_fb_t *test_fb = esp_camera_fb_get();
+    if (test_fb) {
+        ESP_LOGI(TAG, "📷 Frame buffer: %dx%d, %d bytes, format=%d", 
+                 test_fb->width, test_fb->height, test_fb->len, test_fb->format);
+        esp_camera_fb_return(test_fb);
+    } else {
+        ESP_LOGW(TAG, "⚠️ Could not capture test frame");
+    }
+    
+    ESP_LOGI(TAG, "📷 Sensor detected: PID=0x%04X (OV2640=0x%04X, OV3660=0x%04X)", 
+             s->id.PID, OV2640_PID, OV3660_PID);
+    
+    // Always flip vertically for AI-Thinker mounting orientation
+    s->set_vflip(s, 1);
+    // Force horizontal mirror OFF — both boards must produce identical spatial orientation
+    // so that face_recognition_tool::align_face() landmark geometry is consistent
+    s->set_hmirror(s, 0);
+    
     if (s->id.PID == OV3660_PID)
     {
         s->set_brightness(s, 1);
         s->set_saturation(s, -2);
+        ESP_LOGI(TAG, "📷 OV3660 configured with auto settings");
+        
+        ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
+        ESP_LOGI(TAG, "📷 CAMERA SETTINGS DUMP:");
+        ESP_LOGI(TAG, "  Sensor: OV3660 (PID=0x%04X)", s->id.PID);
+        ESP_LOGI(TAG, "  Resolution: QVGA (320x240)");
+        ESP_LOGI(TAG, "  Pixel Format: RGB565");
+        ESP_LOGI(TAG, "  Frame Buffers: %d", fb_count);
+        ESP_LOGI(TAG, "  vflip: 1, hmirror: 0");
+        ESP_LOGI(TAG, "  brightness: 1, saturation: -2");
+        ESP_LOGI(TAG, "  Other: AUTO mode (gain/exposure/whitebal enabled)");
+        ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
     }
     else if (s->id.PID == OV2640_PID)
     {
-        s->set_gain_ctrl(s, 1);       // ENABLE auto gain control
-        s->set_exposure_ctrl(s, 1);   // ENABLE auto exposure control
+        // OV2640: Keep AUTO exposure/gain enabled for dynamic lighting inside the bus
+        ESP_LOGI(TAG, "📷 OV2640 detected — enabling AUTO exposure/gain for dynamic lighting...");
+        
+        s->set_gain_ctrl(s, 1);       // ENABLE auto gain
+        s->set_exposure_ctrl(s, 1);   // ENABLE auto exposure
         s->set_whitebal(s, 1);        // ENABLE auto white balance
-        s->set_aec2(s, 1);            // Enable AEC2 for better exposure
+        s->set_aec2(s, 1);            // Enable AEC2 for better exposure range
         
-        // Critical for face matching across different boards:
-        s->set_gainceiling(s, GAINCEILING_2X); // Limit noise in bus environment
-        s->set_bpc(s, 1);             // Black pixel cancellation
-        s->set_wpc(s, 1);             // White pixel cancellation
+        // Other fixed settings for consistency
+        s->set_gainceiling(s, GAINCEILING_2X);
+        s->set_bpc(s, 0);
+        s->set_wpc(s, 1);
+        s->set_brightness(s, 0);
+        s->set_contrast(s, 0);
+        s->set_saturation(s, 0);
+        s->set_sharpness(s, 1);
+        s->set_denoise(s, 1);
+        s->set_lenc(s, 1);
+        s->set_raw_gma(s, 1);
         
-        s->set_brightness(s, 0);      // Normal brightness
-        s->set_contrast(s, 1);        // Slightly boost contrast for better AI feature extraction
-        s->set_saturation(s, 0);      // Normal saturation
-        s->set_sharpness(s, 1);       // Normal sharpness
-        s->set_denoise(s, 1);         // Enable noise reduction
+        ESP_LOGI(TAG, "📷 OV2640 configured with AUTO exposure/gain");
         
-        ESP_LOGI(TAG, "📷 Camera set to OPTIMIZED AUTO mode for cross-device consistency");
+        // Print all camera settings for debugging
+        ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
+        ESP_LOGI(TAG, "📷 CAMERA SETTINGS DUMP:");
+        ESP_LOGI(TAG, "  Sensor: OV2640 (PID=0x%04X)", s->id.PID);
+        ESP_LOGI(TAG, "  Resolution: QVGA (320x240)");
+        ESP_LOGI(TAG, "  Pixel Format: RGB565");
+        ESP_LOGI(TAG, "  Frame Buffers: %d", fb_count);
+        ESP_LOGI(TAG, "  vflip: 1, hmirror: 0");
+        ESP_LOGI(TAG, "  gain_ctrl: 1 (AUTO)");
+        ESP_LOGI(TAG, "  exposure_ctrl: 1 (AUTO)");
+        ESP_LOGI(TAG, "  whitebal: 1 (AUTO)");
+        ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
+    }
+    else
+    {
+        // Unknown sensor: use safe auto settings
+        ESP_LOGW(TAG, "⚠️ Unknown sensor PID=0x%04X — using AUTO settings", s->id.PID);
+        s->set_gain_ctrl(s, 1);
+        s->set_exposure_ctrl(s, 1);
+        s->set_whitebal(s, 1);
+        
+        ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
+        ESP_LOGI(TAG, "📷 CAMERA SETTINGS DUMP:");
+        ESP_LOGI(TAG, "  Sensor: UNKNOWN (PID=0x%04X)", s->id.PID);
+        ESP_LOGI(TAG, "  Resolution: QVGA (320x240)");
+        ESP_LOGI(TAG, "  Pixel Format: RGB565");
+        ESP_LOGI(TAG, "  Frame Buffers: %d", fb_count);
+        ESP_LOGI(TAG, "  vflip: 1, hmirror: 0");
+        ESP_LOGI(TAG, "  Mode: AUTO (gain/exposure/whitebal enabled)");
+        ESP_LOGI(TAG, "═══════════════════════════════════════════════════");
     }
 
     xQueueFrameO = frame_o;

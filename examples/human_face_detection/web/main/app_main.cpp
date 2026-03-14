@@ -207,7 +207,7 @@ extern "C" void app_main()
     esp_log_level_set("GPS_NEO7M", ESP_LOG_ERROR);
     esp_log_level_set("CSV_LOGGER", ESP_LOG_INFO);
     esp_log_level_set("CSV_UPLOADER", ESP_LOG_INFO);
-    esp_log_level_set("who_camera", ESP_LOG_ERROR);
+    esp_log_level_set("who_camera", ESP_LOG_WARN);
     esp_log_level_set("PROV_SYNC", ESP_LOG_INFO);
     
     // 0. Initialize NVS (REQUIRED before loading config)
@@ -218,18 +218,13 @@ extern "C" void app_main()
     }
     ESP_ERROR_CHECK(ret);
 
-    // 1. Device configuration initialization (ESSENTIAL for WiFi)
-    esp_err_t config_ret = device_config_load(&g_device_config);
-    if (config_ret != ESP_OK || strlen(g_device_config.wifi_ssid) == 0) {
-        if (config_ret == ESP_OK) {
-            ESP_LOGW("APP_MAIN", "Loaded config is invalid (SSID empty), resetting to defaults");
-        } else {
-            ESP_LOGW("APP_MAIN", "Failed to load config, using defaults");
-        }
-        device_config_init(&g_device_config);
-    } else {
-        ESP_LOGI("APP_MAIN", "Config loaded successfully (SSID: %s)", g_device_config.wifi_ssid);
-    }
+    // 1. Device configuration initialization (ALWAYS use hardcoded defaults)
+    // NOTE: We always call device_config_init() which loads the defaults from
+    // device_config.c (set_default_config). This prevents stale NVS data
+    // (e.g. wrong WiFi passwords) from overriding the correct hardcoded values.
+    // To update WiFi/server settings: change device_config.c → rebuild → reflash.
+    device_config_init(&g_device_config);
+    ESP_LOGI("APP_MAIN", "Config loaded (SSID: %s)", g_device_config.wifi_ssid);
     
     // 2. Initialize WiFi with credentials from NVS
     app_wifi_main(g_device_config.wifi_ssid, g_device_config.wifi_password);

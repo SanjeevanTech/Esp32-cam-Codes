@@ -56,9 +56,12 @@ SemaphoreHandle_t xMutex;
 // Custom face recognition settings
 static bool system_reset_flag = false;  // Flag for first run after reset - DISABLED to persist faces
 static int stored_face_id = -1;        // Currently stored face ID
-static const float SIMILARITY_THRESHOLD = 0.5f;  // Threshold for face matching (lowered to 0.5 for more tolerance)
-static int64_t s_last_detection_us = 0;
-static const int64_t DETECTION_THROTTLE_US = 500 * 1000; // 0.5 seconds between detections (much faster)
+// ESP-WHO FaceRecognizer uses cosine similarity on L2-normalized embeddings, range [-1, 1].
+// Default ESP-WHO thresh is 0.55. For bus QVGA lighting, same-face scores ~0.70-0.82.
+// 0.60 is the safe lower bound: catches low-light / angle variance, still rejects strangers.
+static const float SIMILARITY_THRESHOLD = 0.60f;
+// DETECTION_THROTTLE_US kept for log reference only (actual throttle is vTaskDelay)
+static const int64_t DETECTION_THROTTLE_US = 500 * 1000;
 
 typedef struct RecPostArgs {
     uint8_t *jpeg_buf;
@@ -160,12 +163,13 @@ static void task_process_handler(void *arg)
     ESP_LOGI(TAG, "💡 Red LED initialized on GPIO %d", LED_BUILTIN);
     ESP_LOGI(TAG, "💡 White Flash LED initialized on GPIO %d", LED_FLASH);
     
-    // Relaxed thresholds for better detection (Increased sensitivity)
-    // resize_scale 0.4F is a good middle ground for QVGA
-    HumanFaceDetectMSR01 detector(0.20F, 0.3F, 10, 0.4F);  
-    HumanFaceDetectMNP01 detector2(0.25F, 0.3F, 10);      
-    
-    ESP_LOGI(TAG, "📊 Detector config: MSR01(score=0.20, scale=0.4), MNP01(score=0.25)");
+    // Tuned for AI-Thinker ESP32-CAM (OV2640) at QVGA (320x240)
+    // resize_scale=0.7F keeps pyramid levels large enough to detect faces at normal bus-seat distance
+    // score_threshold=0.35F reduces false positives that trigger the "multiple faces" skip
+    HumanFaceDetectMSR01 detector(0.35F, 0.3F, 10, 0.7F);
+    HumanFaceDetectMNP01 detector2(0.35F, 0.3F, 10);
+
+    ESP_LOGI(TAG, "📊 Detector config: MSR01(score=0.35, scale=0.7), MNP01(score=0.35)");
 
 #if CONFIG_MFN_V1
 #if CONFIG_S8
@@ -214,9 +218,7 @@ static void task_process_handler(void *arg)
                  ESP_LOGW(TAG, "⚠️ Loaded ID %d has invalid embedding (NaN/Inf/Zero). Deleting...", stored_face_id);
                  recognizer->delete_id(stored_face_id, true);
                  stored_face_id = -1;
-                 recognizer->delete_id(stored_face_id, true);
-                 stored_face_id = -1;
-                 // faces_enrolled not yet defined/needed here as it starts at 0 later
+                 // NOTE: Only one delete_id() call needed — stored_face_id is already -1 after this
             } else {
                  ESP_LOGI(TAG, "✅ Loaded ID %d embedding is valid (Norm Sq: %.4f)", stored_face_id, sum_sq);
             }
@@ -275,13 +277,14 @@ static void task_process_handler(void *arg)
                 std::list<dl::detect::result_t> &detect_results = detector2.infer((uint16_t *)frame->buf, {(int)frame->height, (int)frame->width, 3}, detect_candidates);
                 int64_t detection_time = (esp_timer_get_time() - start_time) / 1000;
 
-                if (detect_results.size() == 1) {
+                if (detect_results.size() >= 1) {
                     is_detected = true;
                     faces_detected++;
+                    if (detect_results.size() > 1) {
+                        ESP_LOGW(TAG, "⚠️ %d faces in frame — using highest-confidence result", (int)detect_results.size());
+                    }
                     ESP_LOGI(TAG, "✅ Face #%d found (%lld ms)", faces_detected, detection_time);
                     flash_led_on_face_detect();
-                } else if (detect_results.size() > 1) {
-                    ESP_LOGW(TAG, "Multiple faces detected, ignoring");
                 } else if (process_count % 20 == 0) {
                     ESP_LOGI(TAG, "🔍 Scanning... Frame %d (Enrolled: %d)", process_count, (int)recognizer->get_enrolled_id_num());
                 }
@@ -307,6 +310,9 @@ static void task_process_handler(void *arg)
                         recognizer->enroll_id(aligned_face, "", true);
                         stored_face_id = recognizer->get_enrolled_ids().back().id;
                         
+                        // get_face_emb() returns the already L2-normalized embedding stored by enroll_id().
+                        // transform_mfn_output() is called internally with norm=true, so the vector is unit-norm.
+                        // We can send it directly — no manual normalization needed here.
                         Tensor<float> &last_embedding = recognizer->get_face_emb(-1);
                         ESP_LOGI(TAG, "🎉 FIRST PASSENGER LOGGED (Instant): ID %d", stored_face_id);
                         csv_logger_log_face(stored_face_id, last_embedding.element, last_embedding.get_size(), csv_gps, NULL, 0);
@@ -320,7 +326,7 @@ static void task_process_handler(void *arg)
                         
                         if (recognize_result.similarity < SIMILARITY_THRESHOLD) 
                         {
-                            // INSTANT NEW PERSON (Similarity < 0.5)
+                            // INSTANT NEW PERSON (cosine similarity < 0.60 = different person)
                             ESP_LOGW(TAG, "🆕 NEW PERSON DETECTED (Sim: %.3f). Updating 1-Face Cache...", recognize_result.similarity);
                             
                             // RAM CONSTRAINT: CLEAR ALL PREVIOUS FACES
@@ -333,6 +339,7 @@ static void task_process_handler(void *arg)
                             recognizer->enroll_id(aligned_face, "", true);
                             stored_face_id = recognizer->get_enrolled_ids().back().id;
                             
+                            // get_face_emb() returns the already L2-normalized embedding — send directly.
                             Tensor<float> &new_embedding = recognizer->get_face_emb(-1);
                             ESP_LOGI(TAG, "🔄 NEW PASSENGER LOGGED (ID %d) - Cache Updated", stored_face_id);
                             csv_logger_log_face(stored_face_id, new_embedding.element, new_embedding.get_size(), csv_gps, NULL, 0);
@@ -340,7 +347,7 @@ static void task_process_handler(void *arg)
                         }
                         else 
                         {
-                            // SAME PERSON (Similarity >= 0.5)
+                            // SAME PERSON (Similarity >= 0.60 — same-face on QVGA bus camera)
                             ESP_LOGI(TAG, "⏭️ DUPLICATE (Sim: %.3f, ID %d). Skipping.", recognize_result.similarity, recognize_result.id);
                         }
                     }
